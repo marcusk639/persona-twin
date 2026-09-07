@@ -28,18 +28,35 @@ class IngestResult:
 
 def run_connector(conn: Connector, ctx: SubjectContext,
                   ledger: LearningLedger) -> IngestResult:
-    """Backfill and incremental share this one path; only the cursor differs (§9.8)."""
+    """Backfill and incremental share this one path; only the cursor differs (§9.8).
+
+    Every vault row must be traceable to the ingest that produced it, so the
+    ledger entry is recorded even when conn.fetch() raises partway through:
+    rows written before the failure are marked as coming from a partial
+    ingest rather than left with no provenance at all. The cursor is
+    deliberately NOT advanced when fetch() raises, even though some
+    envelopes were written before the failure — resuming from `start` on
+    retry is safe because VaultWriter.write() is idempotent.
+    """
     cursors = CursorStore(ctx.paths.cursors)
     writer = VaultWriter(ctx.paths)
     start = cursors.get(conn.name)
     new = dup = 0
     last = start
-    for env, next_cursor in conn.fetch(ctx, start):
-        if writer.write(env):
-            new += 1
-        else:
-            dup += 1
-        last = next_cursor
+    try:
+        for env, next_cursor in conn.fetch(ctx, start):
+            if writer.write(env):
+                new += 1
+            else:
+                dup += 1
+            last = next_cursor
+    except Exception as exc:
+        # Note: cursor is intentionally left at `start`, not advanced to `last`.
+        ledger.append("ingest", ctx.config.subject_id,
+                      {"source": conn.name, "new": new, "duplicates": dup,
+                       "cursor_from": start, "cursor_to": last,
+                       "partial": True, "error": str(exc)})
+        raise
     if last is not None and last != start:
         cursors.set(conn.name, last)
     ledger.append("ingest", ctx.config.subject_id,

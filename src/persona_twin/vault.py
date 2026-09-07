@@ -46,6 +46,12 @@ class VaultWriter:
 
     def iter_source(self, source: str):
         with self._con() as con:
+            # Lexicographic ordering of these ISO-8601 strings is equivalent to
+            # chronological ordering because every timestamp is UTC-normalized
+            # by RawEnvelope's schema validator (_require_aware in schema.py)
+            # before it is ever stored, so every row carries the same fixed
+            # "+00:00" offset suffix. This equivalence would break if a
+            # non-UTC offset were ever stored.
             for (payload,) in con.execute(
                 "select payload from envelopes where source = ? order by ts", (source,)):
                 yield RawEnvelope.model_validate_json(payload)
