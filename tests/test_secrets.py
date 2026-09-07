@@ -72,6 +72,56 @@ def test_entropy_route_catches_token_matching_no_known_pattern():
     assert blob not in redact(text)
 
 
+@pytest.mark.parametrize(
+    ("token", "expected_label"),
+    [
+        ("sk_live_EXAMPLE1234567890", "stripe_secret_key"),
+        ("pk_test_EXAMPLE1234567890", "stripe_publishable_key"),
+        ("rk_live_EXAMPLE1234567890", "stripe_restricted_key"),
+        ("npm_EXAMPLE12345678901234", "npm_token"),
+        ("pypi-EXAMPLE1234567890123456", "pypi_token"),
+        ("ntn_EXAMPLE12345678901234", "notion_token"),
+        ("secret_EXAMPLE12345678901234", "notion_token_legacy"),
+    ],
+)
+def test_detects_delimiter_prefixed_vendor_key(token, expected_label):
+    """Round 2: vendor-prefixed keys whose prefix is separated from the body
+    by '_' or '-' fragment on that delimiter under the narrowed _CANDIDATE
+    pattern, so they're invisible to the entropy route regardless of
+    threshold. Coverage for them comes only from a dedicated pattern per
+    vendor — assert the specific label, not just that some span exists, so
+    a future pattern collision or removal is caught precisely."""
+    text = f"key {token} here"
+    spans = scan(text)
+    assert spans and any(label == expected_label for _, _, label in spans)
+    assert token not in redact(text)
+
+
+def test_openai_project_scoped_key_is_detected():
+    """The original openai_key pattern (`sk-[A-Za-z0-9]{32,}`) doesn't match
+    project-scoped keys shaped like sk-proj-... because their body contains
+    hyphens. Widening the body class to [A-Za-z0-9_-] fixes this."""
+    token = "sk-proj-" + "EXAMPLE1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    text = f"key {token} here"
+    spans = scan(text)
+    assert spans and any(label == "openai_key" for _, _, label in spans)
+    assert token not in redact(text)
+
+
+def test_short_delimiter_prefixed_token_below_entropy_floor_is_still_caught():
+    """The regression this round exists to prevent: a vendor-prefixed key
+    can be well under the entropy route's 32-character floor (and would
+    fragment on its own delimiter even if it weren't), making it invisible
+    to both detection routes unless a dedicated pattern exists. This test
+    fails without the npm_token pattern."""
+    token = "npm_" + "aB3dE6gH9jK1mN4pQ7rS"
+    assert len(token) < 32, "fixture must be short enough that the entropy floor can't save it"
+    text = f"token {token} end"
+    spans = scan(text)
+    assert spans and any(label == "npm_token" for _, _, label in spans)
+    assert token not in redact(text)
+
+
 def test_realistic_prose_with_hyphenation_survives():
     """Prose with long-ish words, hyphenation, and punctuation must pass
     through unredacted. A prose fixture made only of short plain words

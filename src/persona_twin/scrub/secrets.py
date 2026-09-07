@@ -17,7 +17,9 @@ REDACTION = "[REDACTED]"
 
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9\-_]{20,}")),
-    ("openai_key", re.compile(r"sk-[A-Za-z0-9]{32,}")),
+    # Widened to allow '-'/'_' in the body (was alnum-only) so project-scoped
+    # keys of the form sk-proj-... are covered; see round-2 note below.
+    ("openai_key", re.compile(r"sk-[A-Za-z0-9_-]{32,}")),
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
     ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
@@ -25,6 +27,18 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("bearer", re.compile(r"\bBearer\s+[A-Za-z0-9\-._~+/]{20,}")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,}")),
+    # --- Round 2: vendor-prefixed keys whose prefix is delimited from its
+    # body by '_' or '-'. Narrowing _CANDIDATE (below) to exclude file paths
+    # made these fragment below the entropy floor on that same delimiter,
+    # so no threshold tuning can recover them; only a dedicated pattern can.
+    # See task-15-report.md "Fix round 2" for the measured gap.
+    ("stripe_secret_key", re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b")),
+    ("stripe_publishable_key", re.compile(r"\bpk_(?:live|test)_[A-Za-z0-9]{16,}\b")),
+    ("stripe_restricted_key", re.compile(r"\brk_(?:live|test)_[A-Za-z0-9]{16,}\b")),
+    ("npm_token", re.compile(r"\bnpm_[A-Za-z0-9]{20,}\b")),
+    ("pypi_token", re.compile(r"\bpypi-[A-Za-z0-9_-]{20,}\b")),
+    ("notion_token", re.compile(r"\bntn_[A-Za-z0-9]{20,}\b")),
+    ("notion_token_legacy", re.compile(r"\bsecret_[A-Za-z0-9]{20,}\b")),
 ]
 
 # `-` and `_` were dropped and the minimum length raised 24 -> 32. Kebab-case
