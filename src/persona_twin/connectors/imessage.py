@@ -28,8 +28,18 @@ left join handle h on h.ROWID = m.handle_id
 left join chat_message_join cmj on cmj.message_id = m.ROWID
 left join chat c on c.ROWID = cmj.chat_id
 where m.ROWID > ?
+group by m.ROWID
 order by m.ROWID
 """
+# `group by m.ROWID` guards against fan-out: a message can have more than one
+# chat_message_join row (macOS chat merge/split), which would otherwise
+# duplicate the LEFT JOIN output and emit two envelopes sharing one
+# source_id, violating the uniqueness-within-a-run contract. This did not
+# occur on the real snapshot (77,508 emitted, 77,508 distinct ids) but
+# nothing in the schema prevents it, so it is guarded structurally rather
+# than left to be "empirically absent." The chat_guid picked for a fanned-out
+# row is deterministic (SQLite's default aggregate-free GROUP BY resolves
+# ties to the first row in scan order) but arbitrary among the candidates.
 
 def _to_utc(apple_ts: int | None) -> datetime:
     """Apple epoch (2001-01-01 UTC), nanoseconds on modern macOS, seconds on
