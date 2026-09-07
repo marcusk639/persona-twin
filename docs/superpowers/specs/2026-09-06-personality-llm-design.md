@@ -99,7 +99,16 @@ Any third-party-facing twin interface states that it is a model of the subject, 
 
 **The 611 MB figure is misleading and must not drive the budget.** Only *subject-authored* text needs model processing, and it is one to two orders of magnitude smaller than the raw corpus. Measured on a 60-file sample of the Claude Code transcripts: **1.46% of bytes are user-authored** — 497 MB of transcripts reduces to roughly 7 MB of the subject's own words. Applying the same extraction to mail (quoted replies, signatures, threading) and iMessage yields an estimated **10–30 MB total ≈ 3–8 M tokens**, which is one frontier pass in the tens of dollars, not thousands.
 
-**Measured 2026-09-07 (iMessage, full snapshot):** 77,619 messages total, 37,403 authored by the subject, of which 37,387 carry recoverable text — **2.36 MB ≈ 590 K tokens**. Combined with the transcripts' ~7 MB, the working corpus is tracking toward the *low* end of the estimate: roughly 2.5–3 M tokens, or **under $10 per full frontier pass**.
+**Measured 2026-09-07 — both primary sources, superseding the 1.46% sample estimate above.**
+
+| Source | Raw | Subject-authored prose | Usable after paste filtering |
+|---|---|---|---|
+| iMessage (full snapshot) | 114 MB | 37,387 msgs / **2.36 MB / ~590 K tokens** | same |
+| Claude Code transcripts | 521 MB | 2,572 msgs / 47.0 MB | 1,662 msgs / **2.18 MB / ~545 K tokens** |
+
+The 1.46% figure came from a 60-file sample that happened to contain few large pastes; real extraction is 9.0% of raw, because roughly a third of `type=="user"` turns are pasted files, logs and stack traces rather than typed prose. Those are now flagged `looks_pasted` at extraction rather than dropped. After filtering, the transcript median message is 275 chars (p90 4,251) — a plausible typed-prose distribution, where the unfiltered mean was 18,319 chars.
+
+**Consequence — data scarcity is confirmed as the binding constraint, not cost.** The two largest sources together yield roughly **4.5 MB / ~1.1 M tokens** of genuine prose. A full frontier mining pass over that costs a few dollars, so §4.4's mitigations are insurance rather than necessity. But 1.1 M tokens is a small SFT corpus: retrieval (stage 5) should outperform fine-tuning, stage 7 may miss its gate, and the cold-start handling of §13.2 likely applies to the primary subject. The decisive figure remains usable **reply pairs**, measured at the stage-2 gate.
 
 **Consequence — the binding constraint is data, not cost.** At this volume the §4.4 mitigations are insurance rather than necessity, and the risk shifts to the opposite failure: 590 K tokens of conversational text is a modest corpus for SFT (stage 7). Retrieval (stage 5) extracts more from a small corpus than fine-tuning does, which strengthens the staging already specified. The cold-start handling of §13.2 may apply to the primary subject, not only to future ones. The decisive number is not raw volume but the count of usable **reply pairs** (§6.1 thread reconstruction), which is measured at the stage-2 gate.
 
