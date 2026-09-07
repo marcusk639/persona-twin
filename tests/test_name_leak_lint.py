@@ -34,37 +34,37 @@ def test_no_needles_fails_with_exit_2(tmp_path):
     config_subjects.mkdir(parents=True, exist_ok=True)
     (config_subjects / "example.yaml").write_text("display_name: Example\n")
 
-    # Monkeypatch the root resolution in main
-    import tools.name_leak_lint as lint_module
-    original_file = lint_module.__file__
+    result = main(tmp_path)
+    assert result == 2, f"Expected exit code 2 when no needles, got {result}"
 
-    # Create a temporary module wrapper that accepts root parameter
-    def main_with_root(root=None):
-        import yaml
-        if root is None:
-            root = Path(__file__).resolve().parents[1]
-        else:
-            root = Path(root)
-        needles: list[str] = []
-        for cfg in (root / "config" / "subjects").glob("*.yaml"):
-            if cfg.stem == "example":
-                continue
-            data = yaml.safe_load(cfg.read_text()) or {}
-            needles.append(data.get("display_name", ""))
-            needles.extend(data.get("aliases", []))
 
-        # Filter out empty strings
-        needles = [n for n in needles if n.strip()]
+def test_main_exits_1_when_leak_found(tmp_path):
+    """main() should exit 1 when a subject needle is found in source code."""
+    from tools.name_leak_lint import main
 
-        if not needles:
-            print("No subject identifiers found to check (only example.yaml exists)")
-            return 2
+    config_subjects = tmp_path / "config" / "subjects"
+    config_subjects.mkdir(parents=True, exist_ok=True)
+    (config_subjects / "zephyr.yaml").write_text("display_name: Zephyr\naliases:\n  - Z\n")
 
-        hits = lint_module.scan(root, needles)
-        for path, lineno, line in hits:
-            print(f"{path}:{lineno}: subject identifier leaked: {line}")
-        return 1 if hits else 0
+    src = tmp_path / "src" / "app.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("# Hello Zephyr\n")
 
-    # Call with our temp_path
-    result = main_with_root(tmp_path)
-    assert result == 2, f"Expected exit code 2, got {result}"
+    result = main(tmp_path)
+    assert result == 1, f"Expected exit code 1 when leak found, got {result}"
+
+
+def test_main_exits_0_when_clean(tmp_path):
+    """main() should exit 0 when no leaks are found."""
+    from tools.name_leak_lint import main
+
+    config_subjects = tmp_path / "config" / "subjects"
+    config_subjects.mkdir(parents=True, exist_ok=True)
+    (config_subjects / "zephyr.yaml").write_text("display_name: Zephyr\n")
+
+    src = tmp_path / "src" / "app.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("# Just some code\nx = 1\n")
+
+    result = main(tmp_path)
+    assert result == 0, f"Expected exit code 0 when clean, got {result}"

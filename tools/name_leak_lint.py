@@ -1,6 +1,5 @@
 """Fail the build if subject identifiers appear outside config/ and data/ (spec §13.1)."""
 from __future__ import annotations
-import sys
 from pathlib import Path
 
 SKIP_DIRS = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", ".superpowers", ".token-optimizer"}
@@ -8,6 +7,21 @@ TEXT_SUFFIXES = {".py", ".md", ".yaml", ".yml", ".toml", ".json", ".txt", ".sh"}
 
 def scan(root: Path, needles: list[str],
          allow_dirs: tuple[str, ...] = ("config", "data")) -> list[tuple[Path, int, str]]:
+    """Scan for subject identifiers outside allowed directories.
+
+    Uses case-insensitive substring matching with no word boundaries, so short aliases
+    may match inside ordinary words (e.g., "Jo" in "Major"). This errs toward false
+    positives, which is correct for a leak-prevention lint: catching a real leak is
+    more important than avoiding false alarms.
+
+    Args:
+        root: Root directory to scan
+        needles: Subject identifiers to search for (display_name and aliases)
+        allow_dirs: Directory prefixes where identifiers are allowed (default: config, data)
+
+    Returns:
+        List of (path, line_number, line_text) tuples for each match outside allowed dirs.
+    """
     root = Path(root)
     lowered = [n.lower() for n in needles if n.strip()]
     hits: list[tuple[Path, int, str]] = []
