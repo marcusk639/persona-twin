@@ -1,0 +1,6 @@
+subject_id: example
+display_name: Example Subject
+aliases: []
+enabled_sources:
+  - claude_code
+  - git_repos
