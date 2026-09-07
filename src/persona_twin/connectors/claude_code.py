@@ -7,7 +7,8 @@ from persona_twin.connectors.base import SubjectContext
 from persona_twin.schema import RawEnvelope
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
-_COMMAND = re.compile(r"<(command-name|command-message|local-command-stdout)>.*?</\1>", re.S)
+_COMMAND = re.compile(
+    r"<(command-name|command-message|local-command-stdout|local-command-caveat)>.*?</\1>", re.S)
 _FENCE = re.compile(r"```.*?```", re.S)
 
 # Paste-detection thresholds (fix round 1, §4.4 M1 follow-up): a real 520 MB
@@ -65,29 +66,48 @@ class ClaudeCodeConnector:
         offsets: dict[str, int] = json.loads(cursor) if cursor else {}
         for path in self._files():
             key = str(path)
-            start = offsets.get(key, 0)
+            pos = offsets.get(key, 0)
             size = path.stat().st_size
-            if start >= size:
+            if pos >= size:
                 continue
             with path.open("rb") as fh:
-                fh.seek(start)
-                for raw in fh:
-                    start += len(raw)
+                fh.seek(pos)
+                for raw_line in fh:
+                    if not raw_line.endswith(b"\n"):
+                        # Trailing partial line: the writer (a live session)
+                        # hasn't finished it yet. Stop here and do NOT
+                        # advance the offset past these bytes — leave the
+                        # cursor at the start of this line so the next run
+                        # re-reads it whole once it's complete. Advancing
+                        # past a partial line would seek mid-line on resume
+                        # and permanently lose the completed message.
+                        break
+                    line_start = pos
+                    pos += len(raw_line)
                     try:
-                        entry = json.loads(raw.decode("utf-8", errors="ignore"))
+                        entry = json.loads(raw_line.decode("utf-8", errors="ignore"))
                     except json.JSONDecodeError:
+                        offsets[key] = pos
                         continue
+                    offsets[key] = pos
                     info = _user_text(entry)
                     if info is None:
                         continue
-                    # Hash the pre-fence-strip "raw" text, not the emitted
-                    # "text": raw is the stable identity of the source
-                    # message, so source_id survives future changes to the
-                    # paste heuristic without creating vault duplicates.
+                    # Hash the pre-fence-strip "raw" text plus the line's
+                    # byte offset within the file. Text alone collides on
+                    # identical short messages ("yes", "fails", ...) — a
+                    # real-corpus scan found 114/2,593 messages (4.4%)
+                    # would be silently dropped by the vault's
+                    # (subject_id, source, source_id) dedup without a
+                    # positional component. The line start offset is
+                    # stable across runs for an append-only file, and
+                    # hashing "raw" (not the emitted "text") is preserved
+                    # from the prior decision so source_id survives future
+                    # changes to the paste heuristic.
                     digest = hashlib.sha256(
-                        f"{key}:{info['raw']}".encode("utf-8")).hexdigest()[:24]
+                        f"{key}:{line_start}:{info['raw']}".encode("utf-8")
+                    ).hexdigest()[:24]
                     ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-                    offsets[key] = start
                     yield RawEnvelope(
                         subject_id=ctx.config.subject_id, source=self.name,
                         source_id=digest, ts=ts,
@@ -96,4 +116,3 @@ class ClaudeCodeConnector:
                                  "prose_chars": info["prose_chars"],
                                  "looks_pasted": info["looks_pasted"]},
                         ingested_at=datetime.now(timezone.utc)), json.dumps(offsets)
-            offsets[key] = size
