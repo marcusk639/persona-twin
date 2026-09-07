@@ -91,6 +91,41 @@ class MboxConnector:
         recorded index. No detection or recovery for this is implemented.
         """
         seen: dict[str, int] = json.loads(cursor) if cursor else {}
+        # Message-ID collisions happen in practice, and specifically
+        # *across files* -- a thread exported into both "All Mail" and a
+        # label export lands as two on-disk copies sharing one
+        # Message-ID header. If two distinct messages mapped to the same
+        # source_id, VaultWriter's insert-or-ignore would silently drop
+        # the second one's content. seen_message_ids tracks which
+        # Message-IDs have already claimed a source_id *anywhere in this
+        # fetch() call* -- deliberately scoped to the whole call, not
+        # per-path, since a per-file set would miss exactly the
+        # cross-file case this exists for. A repeat falls back to the
+        # path-qualified index, which is always unique because idx is
+        # monotonic per file.
+        #
+        # Stability across separate runs/calls: this set is local to one
+        # fetch() invocation and starts empty every time, so it does NOT
+        # persist which Message-IDs were already claimed in a prior run.
+        # Two consequences follow. (1) A message that is a byte-for-byte
+        # re-export of one already ingested in an earlier run keeps the
+        # same Message-ID and so still lands on the same source_id --
+        # the vault dedups it correctly, no regression there. (2) A
+        # message whose Message-ID collided with another *within* one
+        # run and so fell back to `{path}:{idx}` will, if the exact same
+        # duplicate-ID pair is re-exported into new files in a later run,
+        # NOT necessarily reproduce the same fallback assignment -- this
+        # is a narrower instance of the cursor-index fragility already
+        # documented above and is not handled. Separately: the fallback
+        # id itself (`{path}:{idx}`) is unaffected by the *order* of
+        # `mbox_paths` -- it's keyed by the literal path string and the
+        # message's own index within that file, not by which file was
+        # processed first, so reordering `mbox_paths` between runs does
+        # not shift any previously-assigned fallback id. Reordering can
+        # only change which of two colliding files "wins" the bare
+        # Message-ID when both are new in the *same* fetch() call, which
+        # cannot happen for a message already past its file's cursor.
+        seen_message_ids: set[str] = set()
         for path in self.paths:
             if not path.exists():
                 # A missing mbox must not look like "zero new messages" --
@@ -104,20 +139,6 @@ class MboxConnector:
 
             key = str(path)
             start = seen.get(key, -1)
-            # Message-ID collisions happen in practice (a thread exported
-            # into both "All Mail" and a label export). If two distinct
-            # messages mapped to the same source_id, VaultWriter's
-            # insert-or-ignore would silently drop the second one's
-            # content. seen_message_ids tracks which Message-IDs have
-            # already claimed a source_id *in this run*; a repeat falls
-            # back to the path-qualified index, which is always unique
-            # because idx is monotonic per file. This means a message
-            # that genuinely re-appears (e.g. re-ingested from a fresh
-            # Takeout) is not guaranteed to dedup against its earlier
-            # copy -- see the cursor-fragility note below. That's an
-            # acceptable trade: possible duplicate content beats silently
-            # losing a distinct message.
-            seen_message_ids: set[str] = set()
             for idx, msg in enumerate(box):
                 if idx <= start:
                     continue

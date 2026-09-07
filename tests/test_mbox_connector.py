@@ -254,7 +254,12 @@ def test_missing_date_header_still_yields_with_fallback_timestamp(tmp_path):
     _write_mbox(p, [msg])
     envs = [e for e, _ in MboxConnector([p], ["alice@example.com"]).fetch(_ctx(tmp_path), None)]
     assert len(envs) == 1
-    assert envs[0].ts is not None
+    # `envs[0].ts is not None` alone would still pass for a regression to
+    # a naive `datetime.now()` (no tzinfo) -- exactly the branch a bare
+    # `now()` is tempting on, and exactly what schema.py's frozen
+    # RawEnvelope forbids. Assert timezone-awareness and UTC explicitly.
+    assert envs[0].ts.tzinfo is not None
+    assert envs[0].ts.utcoffset().total_seconds() == 0
 
 
 def test_multiple_mbox_files_tracked_independently_in_cursor(tmp_path):
@@ -267,3 +272,74 @@ def test_multiple_mbox_files_tracked_independently_in_cursor(tmp_path):
     texts = [e.payload["text"] for e, _ in c.fetch(ctx, None)]
     assert set(texts) == {"from file one", "from file two"}
     assert list(c.fetch(ctx, [x for _, x in c.fetch(ctx, None)][-1])) == []
+
+
+def test_distinct_source_ids_when_message_id_duplicated_across_files(tmp_path):
+    # Fix round 1, item 1: the collision guard must span the whole
+    # fetch() call, not reset per-file. This is the actual motivating
+    # scenario -- a thread exported into both "All Mail" and a label
+    # export -- and it is cross-file by construction. A per-file guard
+    # (the round-1 bug) lets each file's first occurrence of the shared
+    # Message-ID claim it independently, so two DIFFERENT bodies collide
+    # on one source_id and the second is silently dropped by the vault's
+    # insert-or-ignore. Fails if seen_message_ids is re-initialized
+    # inside the `for path in self.paths` loop.
+    p1 = tmp_path / "all_mail.mbox"
+    p2 = tmp_path / "label_export.mbox"
+    _write_mbox(p1, [_msg("alice@example.com", "dup", "body from All Mail export",
+                          message_id="<shared@x>")])
+    _write_mbox(p2, [_msg("alice@example.com", "dup", "DIFFERENT body from label export",
+                          message_id="<shared@x>")])
+    c = MboxConnector([p1, p2], ["alice@example.com"])
+    envs = [e for e, _ in c.fetch(_ctx(tmp_path), None)]
+    ids = [e.source_id for e in envs]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
+    assert [e.payload["text"] for e in envs] == [
+        "body from All Mail export", "DIFFERENT body from label export",
+    ]
+
+
+def test_vault_does_not_swallow_cross_file_message_id_collision(tmp_path):
+    # End-to-end version of the above, proving VaultWriter actually
+    # persists both envelopes.
+    from persona_twin.vault import VaultWriter
+
+    p1 = tmp_path / "all_mail.mbox"
+    p2 = tmp_path / "label_export.mbox"
+    _write_mbox(p1, [_msg("alice@example.com", "dup", "first body", message_id="<shared@x>")])
+    _write_mbox(p2, [_msg("alice@example.com", "dup", "second body", message_id="<shared@x>")])
+    ctx = _ctx(tmp_path)
+    writer = VaultWriter(ctx.paths)
+    c = MboxConnector([p1, p2], ["alice@example.com"])
+    results = [writer.write(env) for env, _ in c.fetch(ctx, None)]
+    assert results == [True, True]
+    assert writer.count("mail") == 2
+
+
+def test_mbox_path_that_is_a_directory_raises_instead_of_yielding_silently(tmp_path):
+    # Fix round 1, item 3: a path that exists but can't be opened as an
+    # mbox (e.g. it's a directory) must raise, not look like an empty
+    # inbox.
+    not_a_file = tmp_path / "looks_like_mbox_but_is_a_dir"
+    not_a_file.mkdir()
+    c = MboxConnector([not_a_file], ["alice@example.com"])
+    with pytest.raises(OSError):
+        list(c.fetch(_ctx(tmp_path), None))
+
+
+def test_multiple_subject_addresses_all_emit_and_others_do_not(tmp_path):
+    # Fix round 1, item 4: subject_addresses is a list of aliases (e.g.
+    # a work address and a personal address); mail from any of them
+    # counts as sent-by-subject, mail from an address not in the list
+    # does not.
+    msgs = [
+        _msg("alice@work.example.com", "work", "sent from work alias"),
+        _msg("alice@home.example.com", "home", "sent from home alias"),
+        _msg("someone.else@example.com", "other", "not the subject"),
+    ]
+    p = tmp_path / "m.mbox"
+    _write_mbox(p, msgs)
+    c = MboxConnector([p], ["alice@work.example.com", "alice@home.example.com"])
+    texts = [e.payload["text"] for e, _ in c.fetch(_ctx(tmp_path), None)]
+    assert texts == ["sent from work alias", "sent from home alias"]
