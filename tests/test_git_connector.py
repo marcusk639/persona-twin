@@ -1,3 +1,4 @@
+import json
 import subprocess
 from persona_twin.config import SubjectConfig
 from persona_twin.paths import SubjectPaths
@@ -52,3 +53,23 @@ def test_identical_messages_get_distinct_source_ids(tmp_path):
     ids = [e.source_id for e, _ in c.fetch(_ctx(tmp_path), None)]
     assert len(ids) == 2
     assert len(set(ids)) == 2
+
+def test_pruned_cursor_falls_back_to_full_log(tmp_path):
+    # A stored cursor SHA that no longer exists in the repo (e.g. pruned
+    # by a hard rebase) must not silently look like "no new commits
+    # forever" -- the connector must retry with a full log and recover
+    # the repo's commits.
+    repo = _repo(tmp_path, ["one", "two"])
+    c = GitConnector([repo], ["alice@example.com"])
+    fabricated_sha = "a" * 40
+    cursor = json.dumps({str(repo): fabricated_sha})
+    msgs = [e.payload["text"] for e, _ in c.fetch(_ctx(tmp_path), cursor)]
+    assert "one" in msgs and "two" in msgs
+
+def test_non_git_directory_is_skipped_without_raising(tmp_path):
+    not_a_repo = tmp_path / "not_a_repo"
+    not_a_repo.mkdir()
+    good_repo = _repo(tmp_path, ["only commit"])
+    c = GitConnector([not_a_repo, good_repo], ["alice@example.com"])
+    msgs = [e.payload["text"] for e, _ in c.fetch(_ctx(tmp_path), None)]
+    assert msgs == ["only commit"]

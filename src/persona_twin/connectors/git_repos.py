@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, subprocess
+import json, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -15,14 +15,26 @@ class GitConnector:
         self.repos = [Path(r) for r in repo_roots]
         self.emails = [e.lower() for e in author_emails]
 
-    def _log(self, repo: Path, since_sha: str | None) -> list[tuple[str, str, str]]:
+    def _run_log(self, repo: Path, since_sha: str | None) -> str | None:
+        """Run `git log`, returning stdout or None on failure (warns to stderr).
+
+        A failure here does not mean "no new commits" — it can also mean
+        the cursor SHA no longer exists (pruned after a rebase) or the
+        path isn't a git repo at all. The caller decides what None means;
+        this method's only job is to never raise and to never stay silent.
+        """
         rng = [f"{since_sha}..HEAD"] if since_sha else []
         cmd = ["git", "log", f"--format=%H{_SEP}%aI{_SEP}%ae{_SEP}%B%x00", *rng]
         try:
-            out = subprocess.run(cmd, cwd=repo, check=True,
-                                 capture_output=True, text=True).stdout
-        except subprocess.CalledProcessError:
-            return []
+            return subprocess.run(cmd, cwd=repo, check=True,
+                                  capture_output=True, text=True).stdout
+        except subprocess.CalledProcessError as exc:
+            err = exc.stderr.strip() if exc.stderr else str(exc)
+            print(f"git_repos: git log failed for {repo!s} "
+                  f"(cursor={since_sha!r}): {err}", file=sys.stderr)
+            return None
+
+    def _parse(self, out: str) -> list[tuple[str, str, str]]:
         rows = []
         for chunk in out.split("\x00"):
             if not chunk.strip():
@@ -31,6 +43,26 @@ class GitConnector:
             if email.lower() in self.emails:
                 rows.append((sha, iso, body.strip()))
         return list(reversed(rows))
+
+    def _log(self, repo: Path, since_sha: str | None) -> list[tuple[str, str, str]]:
+        out = self._run_log(repo, since_sha)
+        if out is None and since_sha is not None:
+            # The ranged call failed with a cursor set — most likely the
+            # stored cursor SHA no longer exists in this repo (e.g. a hard
+            # rebase pruned it), which would otherwise silently return zero
+            # commits forever. Retry with the full log instead of a range.
+            # This is safe specifically because source_id is the commit
+            # SHA and VaultWriter dedupes on (subject_id, source,
+            # source_id): re-reading full history costs time but
+            # re-ingests nothing already in the vault, and recovers any
+            # commits that would otherwise be stranded.
+            out = self._run_log(repo, None)
+        if out is None:
+            # Retry (or the original call, if there was no cursor to
+            # retry without) also failed — a genuinely broken or missing
+            # repo. Not recoverable here; the warning above already fired.
+            return []
+        return self._parse(out)
 
     def fetch(self, ctx: SubjectContext,
               cursor: str | None) -> Iterator[tuple[RawEnvelope, str]]:
