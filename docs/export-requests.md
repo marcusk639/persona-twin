@@ -9,4 +9,4 @@ File these on day one; they take hours to days to arrive and gate nothing else.
 - [ ] **Microsoft 365** — mail export via Outlook, plus Teams meeting transcripts if retained.
 - [ ] **X / Reddit / LinkedIn** — archive requests, if those accounts are used.
 
-Record arrival dates here. Exports land in `data/subjects/<id>/vault/exports/`.
+Record arrival dates here. Exports should be placed in `data/subjects/<id>/vault/exports/`.
