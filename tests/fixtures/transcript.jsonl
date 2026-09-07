@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"fix the failing test in auth.py"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll look at it."}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"1 passed"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"ship it"}]}}
+{"type":"user","message":{"role":"user","content":"<system-reminder>ignore me</system-reminder>"}}
