@@ -3,10 +3,11 @@ import hashlib, json
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class Claim(BaseModel):
+    model_config = ConfigDict(frozen=True)
     claim_id: str
     text: str
     tier: Literal["T2", "T3"] = "T2"
@@ -64,9 +65,9 @@ def mark_recurrence(
     Recurrence is the confabulation detector: a claim reappearing across two
     separately-run sessions is grounded in retrievable history, one that
     only shows up once was generated on the spot. Returns run_a's claims
-    with `recurrence` set; run_a and run_b are not mutated (Claim is
-    frozen-by-convention pydantic, so model_copy is used instead of item
-    assignment).
+    with `recurrence` set; run_a and run_b are not mutated — `Claim` is
+    frozen, so model_copy(update=...) is required (item assignment would
+    raise).
     """
     merged: list[Claim] = []
     for claim in run_a:

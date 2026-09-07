@@ -1,4 +1,7 @@
 import json
+from difflib import SequenceMatcher
+import pydantic
+import pytest
 from persona_twin.harvest.claims import load_report, mark_recurrence
 
 REPORT = [
@@ -44,6 +47,44 @@ def test_missing_file_raises_not_empty(tmp_path):
 
 def test_malformed_report_raises_not_empty(tmp_path):
     p = tmp_path / "bad.json"; p.write_text(json.dumps({"not": "a list"}))
-    import pytest
     with pytest.raises(ValueError):
         load_report(p, "claude", 1)
+
+def test_claim_fields_are_immutable(tmp_path):
+    p = tmp_path / "r.json"; p.write_text(json.dumps(REPORT))
+    claim = load_report(p, "chatgpt", 1)[0]
+    with pytest.raises(pydantic.ValidationError):
+        claim.text = "mutated"
+
+def test_recurrence_boundary_just_above_threshold_is_flagged(tmp_path):
+    # SequenceMatcher ratio computed and asserted explicitly so the test
+    # documents where the 0.6 cutoff actually falls, rather than hoping a
+    # hand-picked string lands on the intended side.
+    text_a = "Opens terse when annoyed"
+    text_b = "Opens terse when frustrated and a bit busy"
+    ratio = SequenceMatcher(None, text_a.lower(), text_b.lower()).ratio()
+    assert ratio > 0.6, ratio
+
+    a = tmp_path / "a.json"; a.write_text(json.dumps([{
+        "text": text_a, "evidence_quote": "q",
+        "source_confidence": "high", "disconfirming_case": "n/a"}]))
+    b = tmp_path / "b.json"; b.write_text(json.dumps([{
+        "text": text_b, "evidence_quote": "q",
+        "source_confidence": "high", "disconfirming_case": "n/a"}]))
+    merged = mark_recurrence(load_report(a, "chatgpt", 1), load_report(b, "chatgpt", 2))
+    assert merged[0].recurrence is True
+
+def test_recurrence_boundary_just_below_threshold_is_not_flagged(tmp_path):
+    text_a = "Opens terse when annoyed"
+    text_b = "Opens terse when frustrated and rather busy"
+    ratio = SequenceMatcher(None, text_a.lower(), text_b.lower()).ratio()
+    assert ratio < 0.6, ratio
+
+    a = tmp_path / "a.json"; a.write_text(json.dumps([{
+        "text": text_a, "evidence_quote": "q",
+        "source_confidence": "high", "disconfirming_case": "n/a"}]))
+    b = tmp_path / "b.json"; b.write_text(json.dumps([{
+        "text": text_b, "evidence_quote": "q",
+        "source_confidence": "high", "disconfirming_case": "n/a"}]))
+    merged = mark_recurrence(load_report(a, "chatgpt", 1), load_report(b, "chatgpt", 2))
+    assert merged[0].recurrence is False
