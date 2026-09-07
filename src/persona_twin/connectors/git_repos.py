@@ -34,6 +34,18 @@ class GitConnector:
 
     def fetch(self, ctx: SubjectContext,
               cursor: str | None) -> Iterator[tuple[RawEnvelope, str]]:
+        # source_id is the bare commit SHA, deliberately not qualified by
+        # repo path. When the same commit exists in multiple repos that
+        # share history (e.g. a fork or a repo split), the vault's
+        # (subject_id, source, source_id) dedup collapses them to one
+        # envelope — correct, since it's one authored commit message and
+        # ingesting it twice would duplicate content in the corpus. The
+        # trade-off: payload["repo"] then reflects whichever repo was
+        # scanned first, so repo attribution for a shared commit is
+        # arbitrary between the repos it appears in. Confirmed against a
+        # real 32-repo scan: 1,235 commits emitted, 1 collision, exactly
+        # this shared-history case (same SHA in two repos with common
+        # ancestry) — not a hash collision.
         heads: dict[str, str] = json.loads(cursor) if cursor else {}
         for repo in self.repos:
             key = str(repo)

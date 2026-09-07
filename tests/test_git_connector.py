@@ -39,3 +39,16 @@ def test_resume_returns_nothing_new(tmp_path):
     for _, cur in c.fetch(ctx, None):
         cursor = cur
     assert list(c.fetch(ctx, cursor)) == []
+
+def test_identical_messages_get_distinct_source_ids(tmp_path):
+    # Two commits with byte-identical messages must still get distinct
+    # source_ids: the connector uses the commit SHA, not a hash of the
+    # message text, so this is expected to pass trivially — it pins the
+    # property against a future change to the id scheme (see the prior
+    # connector's collision bug, which hashed message text and silently
+    # dropped 4.4% of messages at ingest).
+    repo = _repo(tmp_path, ["wip", "wip"])
+    c = GitConnector([repo], ["alice@example.com"])
+    ids = [e.source_id for e, _ in c.fetch(_ctx(tmp_path), None)]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
