@@ -16,6 +16,10 @@ def decode_attributed_body(blob: bytes | None) -> str | None:
     idx = blob.find(_MARKER)
     if idx == -1:
         return None
+    # Assumption: 0x2b length marker is the first occurrence after NSString marker.
+    # This works for all observed blob shapes in the current corpus (100% recovery),
+    # but could mis-parse richer attribute dictionaries with extra bytes between
+    # the class descriptor and length byte in other subjects' data.
     i = blob.find(bytes([_PLUS]), idx)
     if i == -1 or i + 1 >= len(blob):
         return None
