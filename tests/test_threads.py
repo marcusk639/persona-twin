@@ -76,6 +76,24 @@ def test_context_cap_one_over_max_context_drops_oldest():
     assert [c.source_id for c in pairs[0].context] == ["1", "2", "3", "4", "5", "6"]
 
 
+def test_shipped_context_after_truncation_must_still_contain_inbound_turn():
+    # One inbound turn, then more than max_context (6) consecutive subject
+    # turns, all inside the gap window. The non-subject check must run on the
+    # *shipped* (post-truncation) context, not the untruncated gap-filtered
+    # list -- otherwise a reply whose nearest max_context turns are entirely
+    # the subject's own messages ships with a context that never prompted it.
+    turns = [_t(0, False, 0)] + [_t(i, True, i) for i in range(1, 8)]
+    pairs = reply_pairs(turns, max_context=6)
+
+    # The reply at index 7 has exactly the last 6 turns (indices 1-6, all
+    # subject) as its truncated window -- the inbound turn 0 falls outside
+    # the cap, so this reply must be dropped rather than shipped with an
+    # all-subject context.
+    assert not any(p.reply.source_id == "7" for p in pairs)
+    for pair in pairs:
+        assert any(not c.is_subject for c in pair.context)
+
+
 def test_multiple_subject_replies_in_same_thread_each_get_own_context():
     turns = [
         _t(1, False, 0),
