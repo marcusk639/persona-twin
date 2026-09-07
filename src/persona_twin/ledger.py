@@ -1,17 +1,23 @@
 from __future__ import annotations
-import json, uuid
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from persona_twin.schema import _require_aware
+
 
 class LedgerEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
     entry_id: str
     ts: datetime
     kind: str
     subject_id: str
     payload: dict[str, Any]
     parents: list[str] = []
+
+    _aware = field_validator("ts")(_require_aware)
 
 class LearningLedger:
     """Append-only provenance record: source -> corpus -> persona -> adapter."""

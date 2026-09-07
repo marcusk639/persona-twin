@@ -1,5 +1,7 @@
 import pytest
-from persona_twin.ledger import LearningLedger
+from datetime import datetime
+from pydantic import ValidationError
+from persona_twin.ledger import LearningLedger, LedgerEntry
 
 def test_appends_and_reads_back(tmp_path):
     led = LearningLedger(tmp_path / "l.jsonl")
@@ -29,3 +31,38 @@ def test_unknown_provenance_raises(tmp_path):
     led = LearningLedger(tmp_path / "l.jsonl")
     with pytest.raises(KeyError):
         led.provenance("nope")
+
+def test_entry_is_frozen(tmp_path):
+    led = LearningLedger(tmp_path / "l.jsonl")
+    a = led.append("ingest", "alice", {})
+    with pytest.raises(ValidationError):
+        a.kind = "modified"
+
+def test_naive_datetime_raises(tmp_path):
+    led = LearningLedger(tmp_path / "l.jsonl")
+    naive_ts = datetime(2026, 9, 7, 12, 0, 0)  # no timezone
+    with pytest.raises(ValidationError):
+        LedgerEntry(
+            entry_id="test123", ts=naive_ts, kind="ingest",
+            subject_id="alice", payload={})
+
+def test_provenance_diamond_graph(tmp_path):
+    led = LearningLedger(tmp_path / "l.jsonl")
+    a = led.append("ingest", "alice", {})
+    b = led.append("scrub", "alice", {}, parents=[a.entry_id])
+    c = led.append("scrub", "alice", {}, parents=[a.entry_id])
+    d = led.append("build", "alice", {}, parents=[b.entry_id, c.entry_id])
+    chain = [e.entry_id for e in led.provenance(d.entry_id)]
+    assert chain[0] == d.entry_id
+    assert chain.count(a.entry_id) == 1, "a should appear exactly once despite two paths"
+    assert set(chain) == {a.entry_id, b.entry_id, c.entry_id, d.entry_id}
+
+def test_provenance_with_revisited_parent(tmp_path):
+    led = LearningLedger(tmp_path / "l.jsonl")
+    a = led.append("ingest", "alice", {})
+    b = led.append("scrub", "alice", {}, parents=[a.entry_id])
+    c = led.append("build", "alice", {}, parents=[b.entry_id, a.entry_id])
+    chain = led.provenance(c.entry_id)
+    assert len(chain) == 3
+    assert chain[0].entry_id == c.entry_id
+    assert chain[-1].entry_id == a.entry_id
