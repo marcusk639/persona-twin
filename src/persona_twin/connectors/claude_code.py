@@ -8,9 +8,24 @@ from persona_twin.schema import RawEnvelope
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 _COMMAND = re.compile(r"<(command-name|command-message|local-command-stdout)>.*?</\1>", re.S)
+_FENCE = re.compile(r"```.*?```", re.S)
 
-def _user_text(entry: dict) -> str | None:
-    """Return genuine typed prose from a user entry, or None (spec §4.4 M1)."""
+# Paste-detection thresholds (fix round 1, §4.4 M1 follow-up): a real 520 MB
+# corpus run showed 9.04% extraction against a predicted 1.46%, because a
+# third of "user" messages are pasted file/log/stack-trace content rather
+# than typed prose. These blocks are stripped from `text`, but the message
+# is still emitted with raw/prose char counts and a `looks_pasted` flag so
+# the corpus builder — not this connector — decides what to keep.
+_PASTE_CHAR_THRESHOLD = 8000
+
+def _user_text(entry: dict) -> dict | None:
+    """Return genuine typed prose info from a user entry, or None (spec §4.4 M1).
+
+    Keys: "raw" (post reminder/command strip, pre fence strip — used for
+    source_id so the id stays stable if the fence heuristic changes later),
+    "text" (post fence strip — the subject's prose, what downstream reads),
+    "raw_chars", "prose_chars", "looks_pasted".
+    """
     if entry.get("type") != "user":
         return None
     content = (entry.get("message") or {}).get("content")
@@ -22,8 +37,16 @@ def _user_text(entry: dict) -> str | None:
     else:
         return None
     text = "\n".join(parts)
-    text = _COMMAND.sub("", _REMINDER.sub("", text)).strip()
-    return text or None
+    raw = _COMMAND.sub("", _REMINDER.sub("", text)).strip()
+    if not raw:
+        return None
+    prose = _FENCE.sub("", raw).strip()
+    raw_chars = len(raw)
+    prose_chars = len(prose)
+    looks_pasted = (prose_chars > _PASTE_CHAR_THRESHOLD
+                     or (raw_chars - prose_chars) > raw_chars / 2)
+    return {"raw": raw, "text": prose, "raw_chars": raw_chars,
+            "prose_chars": prose_chars, "looks_pasted": looks_pasted}
 
 class ClaudeCodeConnector:
     name = "claude_code"
@@ -54,16 +77,23 @@ class ClaudeCodeConnector:
                         entry = json.loads(raw.decode("utf-8", errors="ignore"))
                     except json.JSONDecodeError:
                         continue
-                    text = _user_text(entry)
-                    if not text:
+                    info = _user_text(entry)
+                    if info is None:
                         continue
+                    # Hash the pre-fence-strip "raw" text, not the emitted
+                    # "text": raw is the stable identity of the source
+                    # message, so source_id survives future changes to the
+                    # paste heuristic without creating vault duplicates.
                     digest = hashlib.sha256(
-                        f"{key}:{text}".encode("utf-8")).hexdigest()[:24]
+                        f"{key}:{info['raw']}".encode("utf-8")).hexdigest()[:24]
                     ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
                     offsets[key] = start
                     yield RawEnvelope(
                         subject_id=ctx.config.subject_id, source=self.name,
                         source_id=digest, ts=ts,
-                        payload={"text": text, "file": key},
+                        payload={"text": info["text"], "file": key,
+                                 "raw_chars": info["raw_chars"],
+                                 "prose_chars": info["prose_chars"],
+                                 "looks_pasted": info["looks_pasted"]},
                         ingested_at=datetime.now(timezone.utc)), json.dumps(offsets)
             offsets[key] = size
