@@ -116,17 +116,25 @@ class MboxConnector:
         # duplicate-ID pair is re-exported into new files in a later run,
         # NOT necessarily reproduce the same fallback assignment -- this
         # is a narrower instance of the cursor-index fragility already
-        # documented above and is not handled. Separately: the fallback
-        # id itself (`{path}:{idx}`) is unaffected by the *order* of
-        # `mbox_paths` -- it's keyed by the literal path string and the
-        # message's own index within that file, not by which file was
-        # processed first, so reordering `mbox_paths` between runs does
-        # not shift any previously-assigned fallback id. Reordering can
-        # only change which of two colliding files "wins" the bare
-        # Message-ID when both are new in the *same* fetch() call, which
-        # cannot happen for a message already past its file's cursor.
+        # documented above and is not handled.
+        #
+        # Ordering (fix round 2): when two files new in the *same*
+        # fetch() call both carry a message with the same Message-ID,
+        # whichever is scanned first keeps the bare Message-ID and the
+        # other falls back to `{path}:{idx}` -- so the scan order must
+        # be deterministic, or the two ids swap depending on what order
+        # the caller happened to pass `mbox_paths` in (a real risk: that
+        # list typically comes from a glob or config, and adding,
+        # renaming, or re-exporting a file changes its natural order).
+        # An id swap is not cosmetic -- it duplicates content in the
+        # vault (see fix-round-2 report for the walkthrough). Sorting by
+        # path string here makes the assignment depend only on the file
+        # paths themselves, not on caller-supplied list order. This does
+        # NOT fix dependence on mbox *index* -- a regenerated Takeout
+        # export whose indices shift still produces different fallback
+        # ids; that limitation is unchanged and still documented above.
         seen_message_ids: set[str] = set()
-        for path in self.paths:
+        for path in sorted(self.paths, key=str):
             if not path.exists():
                 # A missing mbox must not look like "zero new messages" --
                 # that's indistinguishable from a fully-caught-up cursor

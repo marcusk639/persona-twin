@@ -343,3 +343,30 @@ def test_multiple_subject_addresses_all_emit_and_others_do_not(tmp_path):
     c = MboxConnector([p], ["alice@work.example.com", "alice@home.example.com"])
     texts = [e.payload["text"] for e, _ in c.fetch(_ctx(tmp_path), None)]
     assert texts == ["sent from work alias", "sent from home alias"]
+
+
+def test_message_id_collision_fallback_is_independent_of_mbox_paths_order(tmp_path):
+    # Fix round 2: when two files new in the same fetch() call share a
+    # Message-ID, whichever is scanned first keeps the bare Message-ID
+    # and the other falls back to `{path}:{idx}`. If that scan order
+    # depended on the order the caller happened to pass `mbox_paths` in,
+    # flipping the order would swap which message gets which id between
+    # runs -- and since `source_id` is the vault's dedup key, a swap
+    # duplicates content rather than merely renaming it: whichever
+    # message's id changes gets inserted as "new" under an id the vault
+    # has never seen, while its original copy (under the id that didn't
+    # change) is left in place too. Asserts the *same message* gets the
+    # *same id* regardless of the order `mbox_paths` is given in --
+    # fails without sorting `self.paths` in fetch().
+    p1 = tmp_path / "all_mail.mbox"
+    p2 = tmp_path / "label_export.mbox"
+    _write_mbox(p1, [_msg("alice@example.com", "dup", "body one", message_id="<shared@x>")])
+    _write_mbox(p2, [_msg("alice@example.com", "dup", "body two", message_id="<shared@x>")])
+
+    forward = {e.payload["text"]: e.source_id
+               for e, _ in MboxConnector([p1, p2], ["alice@example.com"]).fetch(_ctx(tmp_path), None)}
+    reversed_ = {e.payload["text"]: e.source_id
+                 for e, _ in MboxConnector([p2, p1], ["alice@example.com"]).fetch(_ctx(tmp_path), None)}
+
+    assert forward == reversed_
+    assert len(set(forward.values())) == 2
