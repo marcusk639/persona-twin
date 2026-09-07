@@ -86,6 +86,32 @@ def test_realistic_prose_with_hyphenation_survives():
     assert redact(prose) == prose
 
 
+def test_path_shaped_token_is_not_flagged_despite_high_entropy():
+    """A lowercase, multi-segment filesystem path can be genuinely
+    high-entropy (order-0 character entropy doesn't know it's a path), so
+    raising the threshold alone can't exclude it — the path-shape exclusion
+    must. This fixture's entropy is deliberately above _ENTROPY_THRESHOLD to
+    prove the exclusion, not the threshold, is what's keeping it out."""
+    path = "home/mk7391/dropbox/reportsjan2026/budgetreviewfinal"
+    assert shannon_entropy(path) >= _ENTROPY_THRESHOLD, (
+        "fixture must be high-entropy on its own so a bare threshold check would "
+        "wrongly flag it; only the path-shape exclusion should save it"
+    )
+    assert scan(f"see {path} for details") == []
+    assert redact(f"see {path} for details") == f"see {path} for details"
+
+
+def test_base64_blob_with_slash_is_still_flagged():
+    """Pins the decision to keep '/' in the candidate character class: a
+    base64-shaped secret containing '/' must still be redacted. If a future
+    change drops '/' to "simplify" the pattern, this test breaks loudly."""
+    blob = "R3JlYXRlckVudHJvcHk/TWl4ZWRDYXNlMTIzNDU2Nzg5MA=="
+    assert "/" in blob
+    spans = scan(f"payload {blob} end")
+    assert spans and all(label == "high_entropy" for _, _, label in spans)
+    assert blob not in redact(f"payload {blob} end")
+
+
 def test_redact_raises_when_rescan_finds_residual_match(monkeypatch):
     """Prove the fail-closed re-scan (spec C4) is actually load-bearing.
 

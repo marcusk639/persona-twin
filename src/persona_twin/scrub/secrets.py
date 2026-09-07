@@ -27,11 +27,23 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,}")),
 ]
 
-_CANDIDATE = re.compile(r"[A-Za-z0-9+/=_\-]{24,}")
-# Provisional default from the task brief. NOT calibrated against real data —
-# Step 5 of the brief (tuning this against real transcripts) was deliberately
-# skipped per scope; a separate pass must tune this before it is trusted.
-_ENTROPY_THRESHOLD = 3.9
+# `-` and `_` were dropped and the minimum length raised 24 -> 32. Kebab-case
+# identifiers and file paths are genuinely high-entropy, so no entropy
+# threshold alone can separate them from real secrets (measured: at
+# threshold 5.2, 100% of surviving flags were still path-like). Narrowing the
+# character class removes most path/identifier tokens outright, since real
+# paths and identifiers are usually hyphen- or underscore-joined. `/` is kept
+# because dropping it fragments base64 blobs into thousands of short,
+# non-matching pieces (measured on real data).
+_CANDIDATE = re.compile(r"[A-Za-z0-9+/=]{32,}")
+
+# Calibrated against 2,683 real transcript envelopes (see task-15-report.md
+# for the full before/after numbers). At the brief's original default (3.9)
+# the entropy route flagged 61.5% of messages; 4.5 combined with the
+# narrowed _CANDIDATE pattern and _looks_like_path exclusion below brings
+# that to 6.6%, with zero remaining path-like false positives. Re-check this
+# threshold if a materially different data source is added to the corpus.
+_ENTROPY_THRESHOLD = 4.5
 
 
 def shannon_entropy(s: str) -> float:
@@ -42,6 +54,21 @@ def shannon_entropy(s: str) -> float:
     return -sum((c / n) * math.log2(c / n) for c in counts.values())
 
 
+def _looks_like_path(token: str) -> bool:
+    """True if every '/'-separated segment of token is lowercase-and-path-shaped.
+
+    Filesystem paths are genuinely high-entropy strings and are abundant in
+    developer transcripts (file paths, module names), which is why raising
+    the entropy threshold alone can't separate them from real secrets.
+    Base64 secrets are mixed-case, so this exclusion never matches them even
+    though '/' stays in the candidate character class for their sake.
+    """
+    segments = token.split("/")
+    if len(segments) < 2:
+        return False
+    return all(re.match(r"^[a-z0-9._-]+$", seg) for seg in segments)
+
+
 def scan(text: str) -> list[tuple[int, int, str]]:
     """Return (start, end, label) spans. Deny-by-default on high entropy (spec C2)."""
     spans: list[tuple[int, int, str]] = []
@@ -50,6 +77,8 @@ def scan(text: str) -> list[tuple[int, int, str]]:
             spans.append((m.start(), m.end(), label))
     for m in _CANDIDATE.finditer(text):
         token = m.group(0)
+        if _looks_like_path(token):
+            continue
         if shannon_entropy(token) >= _ENTROPY_THRESHOLD:
             spans.append((m.start(), m.end(), "high_entropy"))
     return sorted(set(spans))
