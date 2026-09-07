@@ -8,3 +8,4 @@ config/subjects/*.yaml
 !config/subjects/example.yaml
 .claude/
 **/.claude/
+.token-optimizer/
