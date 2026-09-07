@@ -13,10 +13,22 @@ class Pseudonymizer:
         self.vault = Path(paths.vault)
         self.key_path = self.vault / "identity_key.bin"
         self.map_path = self.vault / "identity_map.json"
-        if not self.key_path.exists():
-            self.key_path.write_bytes(os.urandom(32))
-            self.key_path.chmod(0o600)
-        self.key = self.key_path.read_bytes()
+        self.key = self._load_or_create_key()
+
+    def _load_or_create_key(self) -> bytes:
+        # Atomic exclusive create: two Pseudonymizer instances constructed
+        # concurrently against an empty vault must not let the second one
+        # overwrite the first's key (that would silently re-map every
+        # counterparty pseudonym generated between the two writes).
+        try:
+            fd = os.open(self.key_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            return self.key_path.read_bytes()
+        try:
+            os.write(fd, os.urandom(32))
+        finally:
+            os.close(fd)
+        return self.key_path.read_bytes()
 
     def _load_map(self) -> dict[str, str]:
         if not self.map_path.exists():
@@ -29,8 +41,16 @@ class Pseudonymizer:
         mapping = self._load_map()
         if token not in mapping:
             mapping[token] = raw_identifier
-            self.map_path.write_text(json.dumps(mapping, indent=2), encoding="utf-8")
-            self.map_path.chmod(0o600)
+            # Write-then-rename: a process killed mid-write leaves the .tmp
+            # file corrupt but never touches identity_map.json itself, so a
+            # crash can't truncate the one artifact that can re-identify a
+            # third party. chmod the .tmp before the replace so 0o600 holds
+            # continuously at the final path — there's no window where a
+            # default-permission file sits there, even briefly.
+            tmp = self.map_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(mapping, indent=2), encoding="utf-8")
+            tmp.chmod(0o600)
+            tmp.replace(self.map_path)
         return token
 
     def resolve(self, pseudonym: str) -> str | None:

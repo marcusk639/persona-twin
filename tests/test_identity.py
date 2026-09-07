@@ -1,3 +1,4 @@
+import stat
 from datetime import datetime, timezone
 from persona_twin.paths import SubjectPaths
 from persona_twin.schema import Turn
@@ -38,3 +39,22 @@ def test_key_is_stable_across_instances(tmp_path):
     paths = _paths(tmp_path)
     first = Pseudonymizer(paths).pseudonym("x@y.com")
     assert Pseudonymizer(paths).pseudonym("x@y.com") == first
+
+def test_existing_key_is_never_overwritten(tmp_path):
+    paths = _paths(tmp_path)
+    p1 = Pseudonymizer(paths)
+    tok_before = p1.pseudonym("carol@x.com")
+    key_bytes_before = p1.key_path.read_bytes()
+
+    p2 = Pseudonymizer(paths)  # constructed against a vault that already has a key
+
+    assert p2.key_path.read_bytes() == key_bytes_before
+    assert p2.key == key_bytes_before
+    assert p2.pseudonym("carol@x.com") == tok_before
+
+def test_key_and_map_files_are_owner_only(tmp_path):
+    paths = _paths(tmp_path)
+    p = Pseudonymizer(paths)
+    p.pseudonym("+15551234567")
+    assert stat.S_IMODE(p.key_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(p.map_path.stat().st_mode) == 0o600
