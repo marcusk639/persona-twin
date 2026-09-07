@@ -1,5 +1,8 @@
+import hmac
 import stat
 from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
 from persona_twin.paths import SubjectPaths
 from persona_twin.schema import Turn
 from persona_twin.normalize.identity import Pseudonymizer
@@ -58,3 +61,25 @@ def test_key_and_map_files_are_owner_only(tmp_path):
     p.pseudonym("+15551234567")
     assert stat.S_IMODE(p.key_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(p.map_path.stat().st_mode) == 0o600
+
+def test_key_creation_ignores_stale_exists_check(tmp_path, monkeypatch):
+    # Deterministic TOCTOU test: simulate the exact stale-check window a
+    # check-then-write implementation is vulnerable to ("the check said the
+    # key was absent, but it wasn't by write time") without racing real
+    # processes, which would only sometimes catch a broken implementation.
+    paths = _paths(tmp_path)
+    known_key = b"\x01" * 32
+    key_path = paths.vault / "identity_key.bin"
+    key_path.write_bytes(known_key)
+    key_path.chmod(0o600)
+    expected_token = "P-" + hmac.new(
+        known_key, b"dave@x.com", sha256).hexdigest()[:12]
+
+    # Every Path.exists() call in the constructor now lies and reports
+    # absent, no matter what's actually on disk.
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+
+    p = Pseudonymizer(paths)
+
+    assert key_path.read_bytes() == known_key
+    assert p.pseudonym("dave@x.com") == expected_token
