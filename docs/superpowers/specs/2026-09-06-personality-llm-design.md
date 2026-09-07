@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-06
 - **Status:** Approved design, pending implementation plan
-- **Subject:** Marcus Klein
+- **Subject:** see `config/subjects/<id>.yaml`
 - **Scope:** Staged research-and-build program producing a system that writes as the subject and converses as the subject
 
 ---
@@ -254,7 +254,7 @@ Built at stage 3 — after normalization, because held-out splits and style fing
 - **Substance review (S3)** and **refusal probes (S6)** — subject-scored, on novel prompts.
 - **Register discrimination (S4)** — same prompt, four audiences, measure between-register vs within-register style distance.
 - **Fact probes (S5)** — curated questions with known answers, scored for correctness and for confident fabrication separately.
-- **Baseline** — every metric is first computed for a pinned reference configuration, defined exactly and never changed without renaming: a named model version, temperature and top-p fixed, and the system prompt `"Reply to this message."` with no name, biography, persona spec, or exemplars. A second *informed* baseline — same model, system prompt naming the subject and their occupation only — is also scored, because it separates "the model knows a CPA named Marcus" from "the system learned the subject." Every later stage reports its delta against both.
+- **Baseline** — every metric is first computed for a pinned reference configuration, defined exactly and never changed without renaming: a named model version, temperature and top-p fixed, and the system prompt `"Reply to this message."` with no name, biography, persona spec, or exemplars. A second *informed* baseline — same model, system prompt naming the subject and their occupation only — is also scored, because it separates "the model knows a CPA with the subject's name" from "the system learned the subject." Every later stage reports its delta against both.
 
 **Contamination rules:** no T2 or T3 input reaches the harness; the LLM judge never sees the persona spec; held-out threads are excluded from the exemplar index at index build time, not at query time.
 
