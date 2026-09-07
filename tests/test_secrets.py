@@ -122,6 +122,37 @@ def test_short_delimiter_prefixed_token_below_entropy_floor_is_still_caught():
     assert token not in redact(text)
 
 
+def test_ordinary_secret_prefixed_identifiers_survive_redaction():
+    """Round 3: `notion_token_legacy` matches `secret_[A-Za-z0-9]{20,}`, and
+    "secret_" alone is a common prefix in ordinary code/prose. This pins the
+    boundary: real identifiers carry internal underscores that break the
+    required contiguous alphanumeric run, so they survive; an actual token
+    with no internal separators does not. If the pattern is ever relaxed to
+    permit '_' or '-' in the body, this test should start failing on the
+    ordinary-identifier side."""
+    ordinary = [
+        "secret_key",
+        "secret_manager_client",
+        "secret_token_value",
+        "AWS_SECRET_ACCESS_KEY",
+        "secret_key_base_configuration",
+        'the secret_sauce of good design',
+        "secret_abcdefghij",
+    ]
+    for identifier in ordinary:
+        assert scan(identifier) == [], f"{identifier!r} must not be flagged"
+
+    prose = "I stored the secret_key in secret_manager_client and it worked."
+    assert redact(prose) == prose
+
+    # Positive case, shown alongside the negative ones so both sides of the
+    # boundary are visible together: no internal separator, still flagged.
+    real_token = "secret_4827JkLmNoPqRsTuVwXyZ0123456789"
+    spans = scan(real_token)
+    assert spans and any(label == "notion_token_legacy" for _, _, label in spans)
+    assert real_token not in redact(real_token)
+
+
 def test_realistic_prose_with_hyphenation_survives():
     """Prose with long-ish words, hyphenation, and punctuation must pass
     through unredacted. A prose fixture made only of short plain words

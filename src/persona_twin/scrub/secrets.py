@@ -38,6 +38,12 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("npm_token", re.compile(r"\bnpm_[A-Za-z0-9]{20,}\b")),
     ("pypi_token", re.compile(r"\bpypi-[A-Za-z0-9_-]{20,}\b")),
     ("notion_token", re.compile(r"\bntn_[A-Za-z0-9]{20,}\b")),
+    # Deliberately requires 20+ contiguous alphanumerics with no separators.
+    # "secret_" alone is a common prefix in ordinary code/prose (secret_key,
+    # secret_manager_client, AWS_SECRET_ACCESS_KEY, ...); real identifiers
+    # carry internal underscores that break this contiguous run, which is
+    # exactly what keeps them from matching. Relaxing the body to permit
+    # '_' or '-' would start matching ordinary identifiers again — do not.
     ("notion_token_legacy", re.compile(r"\bsecret_[A-Za-z0-9]{20,}\b")),
 ]
 
