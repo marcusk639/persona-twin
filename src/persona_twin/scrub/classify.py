@@ -7,10 +7,17 @@ from persona_twin.schema import Turn
 # (client tax files, engagement notes) — never the subject's own writing.
 CONFIDENTIAL_SOURCES = {"karbon"}
 
+# Separators: people write the same identifier several ways. The canonical
+# hyphenated forms and bare digit runs were matched from the start; the
+# space- and dot-separated variants were added after a review found them
+# missed, at a measured cost of 3 extra turns in 81,438 (0.55% -> 0.55%).
+_SEP = r"[-. ]"
+
 _MARKERS: list[re.Pattern[str]] = [
-    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),            # SSN
-    re.compile(r"\b\d{2}-\d{7}\b"),                  # EIN
-    re.compile(r"\b\d{9,17}\b"),                     # bank/account numbers
+    re.compile(rf"\b\d{{3}}{_SEP}\d{{2}}{_SEP}\d{{4}}\b"),      # SSN, separated
+    re.compile(rf"\b\d{{2}}{_SEP}\d{{7}}\b"),                  # EIN, separated
+    re.compile(r"\b\d{9,17}\b"),                             # bare digit run
+    re.compile(rf"\b\d{{4}}{_SEP}\d{{4}}{_SEP}\d{{4}}(?:{_SEP}\d{{1,4}})?\b"),  # grouped account/card
     re.compile(r"\brouting\s*(number|#)", re.I),
     re.compile(r"\baccount\s*(number|#)", re.I),
 ]

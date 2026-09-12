@@ -127,3 +127,30 @@ def test_large_bare_dollar_figure_is_a_false_positive():
     # Written without separators, a >= 9-digit dollar figure also trips the
     # marker even though it names no one's account.
     assert classify(_t("total assessed damages were $123456789 this year")) == "confidential"
+
+
+def test_is_exportable_is_false_for_confidential_turns():
+    """`is_exportable` must track `classify` on BOTH branches.
+
+    Without this, replacing its body with `return True` passes the whole
+    suite — every other call site pairs it with an "open" expectation.
+    """
+    for turn in (
+        _t("Client SSN 123-45-6789 owes 40k on the 1120S"),
+        _t("their EIN is 12-3456789"),
+        _t("anything at all", source="karbon"),
+    ):
+        assert classify(turn) == "confidential"
+        assert not is_exportable(turn)
+
+
+def test_separated_identifier_formats_are_confidential():
+    """The same identifier written with spaces or dots, not just hyphens."""
+    for text in (
+        "ssn 123 45 6789",
+        "ssn 123.45.6789",
+        "ein 12 3456789",
+        "acct 4093 8172 6354",
+        "acct 4093-8172-6354",
+    ):
+        assert classify(_t(text)) == "confidential", text
