@@ -18,6 +18,7 @@ class BuildReport:
     written: int
     redacted: int
     excluded_confidential: int
+    excluded_pasted: int
 
 def build_corpus(ctx: SubjectContext, ledger: LearningLedger, version: str) -> BuildReport:
     """Vault -> normalize -> scrub -> versioned clean corpus. Fails closed (spec C4).
@@ -25,14 +26,20 @@ def build_corpus(ctx: SubjectContext, ledger: LearningLedger, version: str) -> B
     Classification runs before redaction: a confidential turn is excluded
     entirely rather than scrubbed, so redacting it first would both waste
     work and risk making a client record look retainable once its markers
-    were replaced.
+    were replaced. The `looks_pasted` check sits alongside it for the same
+    reason: a pasted file/log/stack-trace turn is dropped outright rather
+    than scrubbed, so there is no point redacting something about to be
+    discarded. The flag itself is set at extraction (claude_code connector)
+    and deliberately never consumed there or in normalize() — filtering is
+    a corpus-build decision, kept out of the vault so it can be revisited
+    without re-ingesting.
     """
     vault = VaultWriter(ctx.paths)
     pseudo = Pseudonymizer(ctx.paths)
     store = CorpusStore(ctx.paths)
 
     kept: list[Turn] = []
-    redacted = excluded = 0
+    redacted = excluded = excluded_pasted = 0
     for source in SOURCES:
         for env in vault.iter_source(source):
             turn = normalize(env)
@@ -40,6 +47,9 @@ def build_corpus(ctx: SubjectContext, ledger: LearningLedger, version: str) -> B
                 continue
             if classify(turn) == "confidential":
                 excluded += 1
+                continue
+            if env.payload.get("looks_pasted"):
+                excluded_pasted += 1
                 continue
             clean_text = redact(turn.text)      # raises ScrubError rather than half-scrubbing
             if clean_text != turn.text:
@@ -50,5 +60,6 @@ def build_corpus(ctx: SubjectContext, ledger: LearningLedger, version: str) -> B
     written = store.write(version, kept)
     ledger.append("corpus_build", ctx.config.subject_id,
                   {"version": version, "written": written,
-                   "redacted": redacted, "excluded_confidential": excluded})
-    return BuildReport(version, written, redacted, excluded)
+                   "redacted": redacted, "excluded_confidential": excluded,
+                   "excluded_pasted": excluded_pasted})
+    return BuildReport(version, written, redacted, excluded, excluded_pasted)
