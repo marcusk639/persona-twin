@@ -1,9 +1,12 @@
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import pytest
 from persona_twin.schema import Turn
 from persona_twin.scrub.classify import (
     classify, is_exportable, CONFIDENTIAL_SOURCES, ClassifyError,
+    _MARKERS, _QUALIFIER_WORDS, _ROUTING_NOUN_WORDS, _ACCOUNT_NOUN_WORDS,
+    _guarded_alternation,
 )
 
 
@@ -593,3 +596,77 @@ def test_bare_acct_without_any_digits_stays_open():
     # The noun-direct-digits marker must not fire on the noun alone --
     # digits are what distinguish this from ordinary mentions of "acct".
     assert classify(_t("let's acct for the discrepancy next quarter")) == "open"
+
+
+def test_bare_acct_directly_followed_by_letter_suffixed_digits_is_confidential():
+    # The noun-direct-digits marker's own boundary-escape sibling, found
+    # while building the structural invariant tests below: it kept a
+    # trailing \b after \d{4,}, the identical defect the four digit-shape
+    # patterns were fixed for in an earlier round -- a letter glued
+    # directly onto the digits ("12345678xyz") read as open.
+    assert classify(_t("acct 12345678xyz is the one")) == "confidential"
+
+
+# --- Round 6: structural invariants, not more per-case tests ---
+#
+# Five rounds of review on this one module found the identical shape of
+# defect each time: a fix correct on one member of a word alternation (or
+# one \b-bookended pattern) left a sibling member of the SAME alternation
+# unguarded. That is a property of how the marker table is built, not
+# something a per-case test can catch once and be done with -- a member
+# added to a family in six months would need review to re-find it all over
+# again. These two tests check the PROPERTY instead, deriving what they
+# check from the same tuples and tags the module builds its patterns from,
+# so a new family member or a new marker is covered automatically without
+# either test being edited.
+
+
+def test_every_qualifier_and_noun_member_rejects_a_trailing_letter():
+    """Structural invariant: every member of every word alternation in
+    classify.py must reject a letter glued directly onto it. The member
+    list here is _QUALIFIER_WORDS / _ROUTING_NOUN_WORDS /
+    _ACCOUNT_NOUN_WORDS -- the exact tuples classify.py builds its regex
+    fragments from via _guarded_alternation -- not a list re-typed into
+    this test, so a member added to any of those tuples is checked here
+    without this test changing at all."""
+    families = {
+        "qualifier": _QUALIFIER_WORDS,
+        "routing noun": _ROUTING_NOUN_WORDS,
+        "account noun": _ACCOUNT_NOUN_WORDS,
+    }
+    for family_name, words in families.items():
+        fragment = re.compile(_guarded_alternation(words), re.I)
+        for word in words:
+            glued = word + "x"
+            assert fragment.match(glued) is None, (
+                f"{family_name} member {word!r} is not guarded against a "
+                f"trailing letter: {glued!r} matched")
+
+
+def test_no_digit_shape_marker_carries_a_boundary_bookend():
+    """Structural invariant: a "digit" marker's ambiguous side is a digit
+    run, and \\b cannot appear anywhere in its source without silently
+    failing to match a letter-adjacent instance ("ID123456789",
+    "ref123-45-6789", "acct4093-8172-6354", "acct 12345678xyz" -- one
+    example per marker below, each found and fixed in a separate round).
+
+    "word" markers are explicitly exempt: their \\b anchors a NOUN, which
+    is the correct, opposite use of a boundary (without it, "rerouting
+    number" and "myaccount #123" would match on substring alone) -- see
+    test_rerouting_number_stays_open and siblings for that behaviour.
+
+    The category tags checked here (_MARKERS' second tuple element) are
+    written once at each marker's definition site, not re-derived or
+    guessed from the pattern source -- an unrecognised tag fails this test
+    loudly rather than being silently skipped."""
+    for pattern, category in _MARKERS:
+        if category == "digit":
+            assert "\\b" not in pattern.pattern, (
+                f"digit-shape marker {pattern.pattern!r} carries a \\b "
+                "bookend, which cannot match a letter-adjacent instance")
+        elif category == "word":
+            continue
+        else:
+            raise AssertionError(
+                f"marker {pattern.pattern!r} has an unrecognised boundary "
+                f"category {category!r} -- add handling for it here")
