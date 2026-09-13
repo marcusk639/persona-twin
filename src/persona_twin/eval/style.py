@@ -83,8 +83,16 @@ def distance(a: StyleFingerprint, b: StyleFingerprint) -> float:
 
 def self_distance_band(turns: list[Turn], trials: int = 200,
                        seed: int = 0) -> tuple[float, float]:
-    """Bootstrap the subject against themselves: repeatedly split the sample in
-    half and measure the distance between halves. Returns (median, p95).
+    """Bootstrap the subject against themselves: repeatedly split the sample's
+    threads in half and measure the distance between halves. Returns
+    (median, p95).
+
+    Splitting on whole threads, not individual turns, matters: turns from the
+    same thread share a conversational register, so shuffling turns puts both
+    halves in the same registers and measures only within-sample sampling
+    noise. Shuffling threads instead lets each half draw a different mix of
+    conversations, so the band captures the between-conversation variation a
+    twin actually has to reproduce.
 
     This is the S2 bar. A system is indistinguishable in style when its distance
     from the subject sits inside the range the subject occupies against
@@ -92,12 +100,22 @@ def self_distance_band(turns: list[Turn], trials: int = 200,
     """
     if len(turns) < 4:
         return (0.0, 0.0)
+    by_thread: dict[str, list[Turn]] = {}
+    for t in turns:
+        by_thread.setdefault(t.thread_id, []).append(t)
+    thread_ids = list(by_thread)
     rng = random.Random(seed)
     dists: list[float] = []
     for _ in range(trials):
-        pool = list(turns)
-        rng.shuffle(pool)
-        mid = len(pool) // 2
-        dists.append(distance(fingerprint(pool[:mid]), fingerprint(pool[mid:])))
+        ids = list(thread_ids)
+        rng.shuffle(ids)
+        mid = len(ids) // 2
+        left = [t for tid in ids[:mid] for t in by_thread[tid]]
+        right = [t for tid in ids[mid:] for t in by_thread[tid]]
+        if len(left) < 4 or len(right) < 4:
+            continue
+        dists.append(distance(fingerprint(left), fingerprint(right)))
+    if not dists:
+        return (0.0, 0.0)
     dists.sort()
     return (dists[len(dists) // 2], dists[int(len(dists) * 0.95)])
