@@ -44,14 +44,15 @@ def split_summary(paths: SubjectPaths, version: str, now: datetime,
             "heldout": len(s.heldout), "quarantined": len(s.quarantined)}
 
 
-# self_distance_band's own floor: below this it returns the degenerate (0.0,
-# 0.0) rather than a real band. Below the same floor here, a GateResult with
-# value=0.0 would read as an unusually TIGHT self-distance bar -- the
-# flattering direction -- when what actually happened is there was not
-# enough held-out data to measure anything. Anchored to the same constant
-# self_distance_band uses internally, not a separately-chosen number, so the
-# two can never drift apart.
-_MIN_SELF_DISTANCE_N = 4
+# There is deliberately no minimum-turn constant here any more. The previous
+# version carried its own `_MIN_SELF_DISTANCE_N = 4` and a comment claiming it
+# was anchored to self_distance_band's internal floor so "the two can never
+# drift apart". That was false: the band had a second degenerate exit reached
+# through thread structure rather than turn count (800 turns in one thread, or
+# turns in exactly two threads), which this guard never mirrored and which
+# therefore printed a confident number that was never measured. The band now
+# refuses in one place and says why, and this function relays that refusal
+# instead of second-guessing it.
 
 
 def s2_self_distance(paths: SubjectPaths, version: str, now: datetime,
@@ -66,18 +67,19 @@ def s2_self_distance(paths: SubjectPaths, version: str, now: datetime,
     s = split_corpus(turns, now, weeks)
     subject_heldout = [t for t in s.heldout if t.is_subject]
     n = len(subject_heldout)
-    if n < _MIN_SELF_DISTANCE_N:
+    band = self_distance_band(subject_heldout, trials=200, seed=seed)
+    if not band.measured:
         return GateResult(
             criterion="S2", value=None, target=target, n=n, passed=None,
-            note=f"S2 cannot be evaluated: only {n} subject held-out turn(s) "
-                 f"in corpus {version!r} (need >= {_MIN_SELF_DISTANCE_N} for a "
-                 "self-distance band) — this is not a zero-width band, there "
-                 "is no band")
-    median, p95 = self_distance_band(subject_heldout, trials=200, seed=seed)
-    return GateResult(criterion="S2", value=p95, target=target,
+            note=f"S2 cannot be evaluated: {band.reason} ({n} subject held-out "
+                 f"turn(s) in corpus {version!r}) — this is not a zero-width "
+                 "band, there is no band")
+    return GateResult(criterion="S2", value=band.p95, target=target,
                       n=n, passed=None,
-                      note=f"median self-distance {median:.3f}; baseline only, "
-                           "no system to score yet")
+                      note=f"median self-distance {band.median:.3f} over "
+                           f"{band.trials} completed trial(s) across "
+                           f"{band.partitions} distinct thread split(s); "
+                           "baseline only, no system to score yet")
 
 
 # S5's composition requirement (spec §7): n >= 200 with the unanswerable
