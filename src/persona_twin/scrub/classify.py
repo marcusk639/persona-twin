@@ -9,6 +9,26 @@ from persona_twin.schema import Turn
 CONFIDENTIAL_SOURCES = {"karbon"}
 
 
+def _is_confidential_source(source: str) -> bool:
+    """Case- and naming-variant-tolerant match against CONFIDENTIAL_SOURCES.
+
+    An exact, case-sensitive `in` check treats "Karbon", "KARBON" and
+    "karbon_export" as ordinary open sources -- and this is the rule that
+    protects records carrying NO content markers at all, so getting it
+    wrong fails in the worst possible direction. No Karbon connector exists
+    yet, which is exactly what makes it a trap: whoever writes one has no
+    established casing or naming to match against. This codebase's own
+    convention for connector names is a compound "<source>_<subtype>" (see
+    git_repos, claude_ai, claude_code), so "karbon_export" is a plausible
+    real name, not a hypothetical one -- matched here as a prefix, not a
+    substring, so an unrelated source that merely contains "karbon"
+    somewhere in its name would not.
+    """
+    normalized = source.strip().lower()
+    return any(normalized == s or normalized.startswith(f"{s}_")
+               for s in CONFIDENTIAL_SOURCES)
+
+
 class ClassifyError(Exception):
     """Raised when classification cannot proceed on malformed input.
 
@@ -33,13 +53,30 @@ class ClassifyError(Exception):
 # numbers separated by a blank line or more.
 _SEP = r"[-. ]\s{0,4}"
 
+# The qualifier family that can follow "routing" / "account" / "acct" / "a/c":
+# a bare "#", the full word, or the common written abbreviations "no[.]",
+# "num[.]", "nbr[.]" -- a review found the phrase marker caught "account
+# number" and "account #" but missed "acct no. 12345678", "account no
+# 12345678" and "acct num 12345678", each a different spelling of the same
+# qualifier, not a different marker. Sharing this fragment between the
+# routing and account patterns means a future addition to the family (or a
+# fix to one) can't be made to only one of them by accident.
+_QUALIFIER = r"(?:number|no\.?|num\.?|nbr\.?|#)"
+
 _MARKERS: list[re.Pattern[str]] = [
     re.compile(rf"\b\d{{3}}{_SEP}\d{{2}}{_SEP}\d{{4}}\b"),      # SSN, separated
     re.compile(rf"\b\d{{2}}{_SEP}\d{{7}}\b"),                  # EIN, separated
-    re.compile(r"\b\d{9,}\b"),                               # bare digit run, unbounded above
+    # No \b bookends: a boundary requires a transition between a "word" and
+    # a "non-word" character, and a letter or underscore is ALSO a word
+    # character, so \b\d{9,}\b cannot match "ID123456789", "123456789Z" or
+    # "acct_123456789" at all -- the digit run is simply never bounded on
+    # that side. \d{9,} without \b still finds the maximal contiguous digit
+    # run wherever it appears (regex quantifiers are greedy by default), so
+    # dropping both bookends closes the family rather than the one shape
+    # that happens to have whitespace or punctuation on both sides.
+    re.compile(r"\d{9,}"),                                    # bare digit run, unbounded above, unbounded adjacency
     re.compile(rf"\b\d{{4}}{_SEP}\d{{4}}{_SEP}\d{{4}}(?:{_SEP}\d{{1,4}})?\b"),  # grouped account/card
-    re.compile(r"\brouting\s*(number|#)", re.I),
-    re.compile(r"\b(?:account|acct\.?|a/c)\s*(number|#)", re.I),
+    re.compile(rf"\brouting\s*{_QUALIFIER}", re.I),
     # "account" alone missed the common CPA-office abbreviations "acct" and
     # "a/c" (e.g. "acct #12345678"). Deliberately NOT including bare "act":
     # this is a tax practice's data, where "the Act" (Tax Cuts and Jobs Act,
@@ -47,30 +84,57 @@ _MARKERS: list[re.Pattern[str]] = [
     # vocabulary, not account references -- adding it would trade a content
     # false-negative for a source-of-truth false-positive on real
     # discussion of legislation, not close the hole it's meant to close.
+    re.compile(rf"\b(?:account|acct\.?|a/c)\s*{_QUALIFIER}", re.I),
 ]
 
-# Unicode look-alikes for the ASCII separators in _SEP. A non-breaking space
-# or non-breaking hyphen from a pasted PDF/Word export renders identically to
-# its ASCII twin but would otherwise hide an identifier from every marker
-# above, since _SEP's character class is ASCII-only. This is intentionally a
-# small, explicit alias table rather than a broad "fold everything unicode"
-# pass -- NFKC alone won't do this (U+2011 has no compatibility decomposition
-# to U+002D), so both need naming.
-_SEPARATOR_ALIASES = str.maketrans({
-    " ": " ",   # non-breaking space
-    "‑": "-",   # non-breaking hyphen
-})
+# Unicode characters that behave like an ASCII separator but are not one,
+# handled as two FAMILIES rather than as a list of the specific codepoints a
+# review happened to demonstrate -- a prior version of this table named only
+# U+00A0 and U+2011 and was found, the next time it was reviewed, to have
+# left every other member of both families unswept:
+#
+# * Cf (Format): zero-width joiners and soft hyphen. These render as
+#   invisible, so the honest normalization is to remove them, not to
+#   substitute a visible character -- "123​45​6789" is meant to be
+#   read as one contiguous number with an invisible seam, not as
+#   hyphen-separated.
+# * Pd (Dash Punctuation): every dash variant -- en dash, em dash, figure
+#   dash, horizontal bar, hyphen, non-breaking hyphen, and the fullwidth and
+#   small compatibility forms -- folds to ASCII '-'. NFKC alone does not
+#   reach this family: it maps U+2011 (non-breaking hyphen) to U+2010
+#   (hyphen), not to U+002D, so the target of that mapping needs handling in
+#   its own right, which the Pd sweep below gives it for free.
+# * MINUS SIGN (U+2212) behaves like a dash but Unicode categorizes it as Sm
+#   (Math Symbol), a category far too broad to sweep wholesale -- it also
+#   contains '+', '=', '<', '>', which must never fold to '-'. Named
+#   individually for that reason; this is the one deliberate exception to
+#   "handle the category, not the character."
+_DASH_LOOKALIKE = "−"  # MINUS SIGN — category Sm, not Pd; see above
 
 
 def _for_matching(text: str) -> str:
     """A normalized VIEW of `text` used only to decide whether a marker
     fires -- never stored, never returned, and the caller's Turn is
     unmodified (it is frozen, so there is no way to mutate it in place).
-    NFKC on top of the alias table folds broader compatibility variants
-    (e.g. ideographic space, fullwidth forms) without enumerating every one
-    of them by hand.
+
+    NFKC runs first and remains load-bearing on its own: it is what maps a
+    non-breaking space and every other Unicode space variant to ASCII
+    space, and U+2011 to U+2010, before the category sweep below ever sees
+    them. The sweep after it folds the dash family to '-' and drops the
+    invisible-format family entirely, neither of which NFKC reaches on its
+    own (see the module-level comment above the two categories).
     """
-    return unicodedata.normalize("NFKC", text.translate(_SEPARATOR_ALIASES))
+    normalized = unicodedata.normalize("NFKC", text)
+    out = []
+    for ch in normalized:
+        category = unicodedata.category(ch)
+        if category == "Cf":
+            continue
+        if category == "Pd" or ch == _DASH_LOOKALIKE:
+            out.append("-")
+            continue
+        out.append(ch)
+    return "".join(out)
 
 
 def classify(turn: Turn) -> str:
@@ -95,7 +159,7 @@ def classify(turn: Turn) -> str:
     """
     if not isinstance(turn.text, str):
         raise ClassifyError(f"expected str for turn.text, got {type(turn.text).__name__}")
-    if turn.source in CONFIDENTIAL_SOURCES:
+    if _is_confidential_source(turn.source):
         return "confidential"
     text = _for_matching(turn.text)
     if any(p.search(text) for p in _MARKERS):

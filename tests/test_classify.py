@@ -237,3 +237,166 @@ def test_routing_number_phrase_alone_is_confidential():
 def test_account_number_phrase_alone_is_confidential():
     # Same isolation for the account-number phrase marker: no digits at all.
     assert classify(_t("what's the account number for this client")) == "confidential"
+
+
+# --- Round 2: independent review found three of these are siblings of gaps
+# round 1 already closed on a different axis. These tests target the FAMILY
+# each fix closes, not just the reviewer's demonstrated instance. ---
+
+
+# Gap 7 (HIGH): \b\d{9,}\b cannot match a digit run adjacent to ANY word
+# character (a letter or underscore is also \w, so a \b never forms there).
+
+
+def test_bare_digit_run_confidential_when_prefixed_by_a_letter():
+    assert classify(_t("ID123456789 needs review")) == "confidential"
+
+
+def test_bare_digit_run_confidential_when_suffixed_by_a_letter():
+    assert classify(_t("reference 123456789Z on file")) == "confidential"
+
+
+def test_bare_digit_run_confidential_when_joined_by_underscore():
+    # Underscore is a word character too -- the same escape, a different
+    # adjoining character.
+    assert classify(_t("field acct_123456789 in the export")) == "confidential"
+
+
+def test_bare_digit_run_confidential_when_embedded_in_a_longer_alnum_token():
+    assert classify(_t("token x1234567890123456 expired")) == "confidential"
+
+
+def test_bare_digit_run_confidential_when_glued_to_lowercase_label():
+    assert classify(_t("ssn123456789 typo'd with no space")) == "confidential"
+
+
+# Gap 8 (MEDIUM, latent): every Unicode Pd (Dash Punctuation) character folds
+# to ASCII '-', every Cf (Format) character is dropped, and the one dash
+# lookalike outside Pd (MINUS SIGN, category Sm) is named explicitly. Tested
+# with a mix of the reviewer's examples and DIFFERENT category members the
+# reviewer did not name, to demonstrate this is a category sweep and not a
+# longer copy of the same list.
+
+
+def test_en_dash_separated_ssn_is_confidential():
+    assert classify(_t("SSN 123–45–6789")) == "confidential"
+
+
+def test_figure_dash_separated_ssn_is_confidential():
+    assert classify(_t("SSN 123‒45‒6789")) == "confidential"
+
+
+def test_horizontal_bar_separated_ssn_is_confidential():
+    # U+2015 HORIZONTAL BAR: Pd, like the dashes above, but not one the
+    # review named -- this is what pins the fix to the category rather than
+    # to a longer enumeration of the same handful of characters.
+    assert classify(_t("SSN 123―45―6789")) == "confidential"
+
+
+def test_minus_sign_separated_ssn_is_confidential():
+    # U+2212 MINUS SIGN: category Sm, not Pd -- the one deliberate named
+    # exception, since Sm also contains '+', '=', '<', '>' and sweeping the
+    # whole category would be wrong.
+    assert classify(_t("SSN 123−45−6789")) == "confidential"
+
+
+def test_soft_hyphen_in_ssn_is_confidential():
+    # U+00AD SOFT HYPHEN: category Cf, dropped rather than folded to '-'
+    # because it renders as invisible, not as a visible separator.
+    assert classify(_t("SSN 123\xad45\xad6789")) == "confidential"
+
+
+def test_zero_width_non_joiner_in_ssn_is_confidential():
+    # U+200C ZERO WIDTH NON-JOINER: Cf, like ZWSP/BOM/word joiner, but not
+    # one the review named -- the Cf-category counterpart to the Pd proof
+    # above.
+    assert classify(_t("SSN 123‌45‌6789")) == "confidential"
+
+
+def test_plus_and_equals_are_not_folded_to_hyphen():
+    # The Sm exception for MINUS SIGN must stay narrow: '+' and '=' are also
+    # Sm and must never be treated as separators, or ordinary arithmetic in
+    # domain-expertise text would start tripping the SSN/EIN shape markers.
+    assert classify(_t("5+3=8 is not an identifier")) == "open"
+
+
+# Gap 9 (MEDIUM-LOW): the qualifier after routing/account/acct/a-c is a
+# family -- number, #, no[.], num[.], nbr[.] -- not just the two spellings
+# the original phrase markers recognised.
+
+
+def test_acct_no_dot_qualifier_is_confidential():
+    assert classify(_t("acct no. 12345678")) == "confidential"
+
+
+def test_account_bare_no_qualifier_is_confidential():
+    assert classify(_t("account no 12345678")) == "confidential"
+
+
+def test_routing_no_dot_qualifier_is_confidential():
+    assert classify(_t("routing no. 12345678")) == "confidential"
+
+
+def test_a_slash_c_bare_no_qualifier_is_confidential():
+    assert classify(_t("a/c no 12345678")) == "confidential"
+
+
+def test_account_nbr_qualifier_is_confidential():
+    assert classify(_t("account nbr 12345678")) == "confidential"
+
+
+def test_acct_num_qualifier_is_confidential():
+    assert classify(_t("acct num 12345678")) == "confidential"
+
+
+def test_account_no_longer_is_an_accepted_false_positive():
+    """Reported honestly, like the bare-digit-run false positives above: the
+    bare "no" qualifier the gap-9 fix requires (per the review's own
+    "account no 12345678" example) cannot be distinguished from ordinary
+    English "no longer" / "no more" without a digit nearby. Measured on the
+    real corpus: 2 of 85,330 turns newly flagged this way, versus 45 from
+    the gap-7 fix -- accepted under the same asymmetric cost model as the
+    bare 9-17 digit marker's existing phone-number and timestamp false
+    positives (see the tests above)."""
+    assert classify(_t("the account no longer has any activity")) == "confidential"
+
+
+# Gap 10 (LOW): the old explicit alias table had one dead entry (U+00A0,
+# already handled by NFKC) folded into a general category sweep that
+# replaces the table entirely. This test pins NFKC's remaining
+# responsibility -- non-breaking space and other Unicode space variants --
+# so a future refactor that drops it is caught. (The Pd/Cf sweep above does
+# NOT reach U+00A0: its category is Zs, not Pd or Cf.)
+
+
+def test_nfkc_is_still_load_bearing_for_nonbreaking_space():
+    # This is the same case as test_nonbreaking_space_separated_ssn_is_
+    # confidential above; named and commented here specifically as the
+    # regression pin for NFKC, since nothing else in _for_matching reaches
+    # a Zs-category space.
+    assert classify(_t("SSN 123\xa045\xa06789")) == "confidential"
+
+
+# Gap 11 (LOW-MEDIUM, latent): CONFIDENTIAL_SOURCES matching is now
+# case-insensitive and tolerates a "<name>_<subtype>" compound, matching
+# this codebase's own connector-naming convention -- not a substring match,
+# so an unrelated source that happens to contain "karbon" does not match.
+
+
+def test_karbon_source_matching_is_case_insensitive():
+    for source in ("Karbon", "KARBON", "kArBoN"):
+        assert classify(_t("client called about scheduling", source=source)) == "confidential", source
+
+
+def test_karbon_compound_source_name_is_confidential():
+    # No Karbon connector exists yet; this is the plausible name one would
+    # use, following this codebase's own "<source>_<subtype>" convention
+    # (git_repos, claude_ai, claude_code).
+    assert classify(_t("client called about scheduling", source="karbon_export")) == "confidential"
+
+
+def test_source_merely_containing_karbon_is_not_matched():
+    # The fix is a prefix match on "karbon_", not a substring match anywhere
+    # in the source name -- an unrelated source name should not collide.
+    assert classify(_t("anything", source="unkarbon")) == "open"
+    assert classify(_t("anything", source="prekarbon_thing")) == "open"
