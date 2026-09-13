@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
+import pytest
 from persona_twin.schema import Turn
-from persona_twin.scrub.classify import classify, is_exportable, CONFIDENTIAL_SOURCES
+from persona_twin.scrub.classify import (
+    classify, is_exportable, CONFIDENTIAL_SOURCES, ClassifyError,
+)
 
 
 def _t(text, source="imessage"):
@@ -154,3 +158,82 @@ def test_separated_identifier_formats_are_confidential():
         "acct 4093-8172-6354",
     ):
         assert classify(_t(text)) == "confidential", text
+
+
+# --- Fix round: six confirmed gaps from independent review, each isolated ---
+
+
+def test_acct_abbreviation_with_hash_is_confidential():
+    # The demonstrated gap: "acct" alone did not match the literal "account"
+    # phrase marker, and 8 digits falls under the bare-digit-run floor, so
+    # neither mechanism fired.
+    assert classify(_t("acct #12345678")) == "confidential"
+
+
+def test_a_slash_c_abbreviation_with_number_is_confidential():
+    assert classify(_t("a/c number 12345678")) == "confidential"
+
+
+def test_ordinary_act_reference_stays_open():
+    # Bare "act" is deliberately excluded from the abbreviation set: this is
+    # a tax practice's data, where "the Act" (Tax Cuts and Jobs Act, CARES
+    # Act, "Act #115") is ordinary domain vocabulary, not an account
+    # reference. Including it would trade the content false-negative for a
+    # false-positive on real discussion of legislation.
+    assert classify(_t("under the Tax Cuts and Jobs Act, bonus depreciation phases out")) == "open"
+
+
+def test_nonbreaking_space_separated_ssn_is_confidential():
+    # A non-breaking space (U+00A0), as pasted from a PDF or Word export,
+    # renders identically to an ASCII space but is a different codepoint —
+    # the matcher must not be fooled by it.
+    assert classify(_t("SSN 123 45 6789")) == "confidential"
+
+
+def test_nonbreaking_hyphen_separated_ssn_is_confidential():
+    assert classify(_t("SSN 123‑45‑6789")) == "confidential"
+
+
+def test_classify_does_not_mutate_stored_text():
+    # The normalization used for matching must be a view, never applied to
+    # the Turn's own text (which also can't happen in place -- Turn is
+    # frozen -- but the contract is worth pinning explicitly).
+    t = _t("SSN 123 45 6789")
+    original = t.text
+    classify(t)
+    assert t.text == original
+
+
+def test_ssn_wrapped_across_newline_is_confidential():
+    # A hard line-wrap landing right after the separator must not hide the
+    # identifier: the separator itself is still present, just followed by
+    # incidental whitespace.
+    assert classify(_t("SSN 123-45-\n6789")) == "confidential"
+
+
+def test_eighteen_digit_run_is_confidential():
+    # \b\d{9,17}\b could never match inside an 18+ digit run at all: a \b
+    # requires a word/non-word transition, and no interior position of a
+    # longer contiguous run qualifies. The floor stays at 9; only the
+    # (previously unintended) ceiling is removed.
+    assert classify(_t("wire to account 123456789012345678 today")) == "confidential"
+
+
+def test_non_string_text_raises_classify_error():
+    # Mirrors secrets.py's redact(): fail loudly rather than let an
+    # unexpected type make every marker's .search() silently a no-op.
+    t = SimpleNamespace(text=None, source="imessage")
+    with pytest.raises(ClassifyError):
+        classify(t)
+
+
+def test_routing_number_phrase_alone_is_confidential():
+    # No digit-shape marker qualifies here at all -- this isolates the
+    # routing-number phrase marker, which the existing suite never did
+    # (its one "marker" fixture also contained a qualifying bare digit run).
+    assert classify(_t("please confirm the routing number before we wire")) == "confidential"
+
+
+def test_account_number_phrase_alone_is_confidential():
+    # Same isolation for the account-number phrase marker: no digits at all.
+    assert classify(_t("what's the account number for this client")) == "confidential"
