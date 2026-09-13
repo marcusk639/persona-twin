@@ -62,27 +62,36 @@ _SEP = r"[-. ]\s{0,4}"
 # routing and account patterns means a future addition to the family (or a
 # fix to one) can't be made to only one of them by accident.
 #
-# Each short alternative -- "no", "num", "nbr" -- carries a trailing
-# `(?![a-zA-Z])` guard: without it, "no" alone is a prefix of ordinary
-# English words ("notes", "now", "nothing", "normally", "not", "november"),
-# and "account notes are attached" or "routing normally takes a week" would
-# read as confidential purely because "no" happens to start the next word,
-# with nothing after it to say the match should have stopped there. The
-# guard rejects exactly the prefix-swallowing case (no letter immediately
-# glued on) while leaving the genuinely ambiguous case untouched: "the
-# account no longer has any activity" still matches, because "no" there is
-# followed by a SPACE, not by "nger" -- that collision is inherent to a bare
-# "no" qualifier (see the accepted-false-positive test below) and the guard
-# was never meant to close it, only the avoidable half.
+# Every word alternative -- "number", "no", "num", "nbr" -- carries the SAME
+# trailing `(?![a-zA-Z])` guard, applied once to the whole group rather than
+# to each alternative individually: without it, each one is a prefix of
+# ordinary English words that happen to start the same way ("no" swallows
+# "notes"/"now"/"nothing"/"normally"/"not"/"november"; "number" itself
+# swallows "numbering"/"numbered"/"numberless" the identical way one level
+# up). "account notes are attached" or "the account numbering scheme" would
+# both read as confidential purely because the word in front happened to
+# start the same way, with nothing after it to say the match should have
+# stopped there. Guarding only the short forms and treating "number" as a
+# complete word needing no guard of its own was tried first and found, on
+# review, to be exactly the same unswept-sibling mistake as guarding only
+# one digit-shape pattern earlier in this module -- "number" is a prefix of
+# other real words too, not a safe terminus.
+#
+# The guard rejects exactly the prefix-swallowing case (no letter
+# immediately glued onto the qualifier) while leaving the genuinely
+# ambiguous case untouched: "the account no longer has any activity" still
+# matches, because "no" there is followed by a SPACE, not by "nger" -- that
+# collision is inherent to a bare "no" qualifier (see the
+# accepted-false-positive test below) and the guard was never meant to
+# close it, only the avoidable half.
 #
 # "number" stays in the alternation even though "num" is a prefix of it:
 # without the guard, "num\.?" alone silently swallowed "number" too (making
-# the "number" alternative dead code), but the guard's negative lookahead
-# now rejects "num" followed by the letters "ber" the same way it rejects
-# "no" followed by "tes" -- so "number" is reachable again, and removing it
-# would silently reopen "account number is on file" and every other bare
-# "number" phrasing.
-_QUALIFIER = r"(?:number|no\.?(?![a-zA-Z])|num\.?(?![a-zA-Z])|nbr\.?(?![a-zA-Z])|#)"
+# the "number" alternative dead code), but the guard now rejects "num"
+# followed by the letters "ber" the same way it rejects "no" followed by
+# "tes" -- so "number" is reachable again, and removing it would silently
+# reopen "account number is on file" and every other bare "number" phrasing.
+_QUALIFIER = r"(?:(?:number|nbr\.?|num\.?|no\.?)(?![a-zA-Z])|#)"
 
 # Routing and ABA are the same concept under two names -- ABA (American
 # Bankers Association) routing numbers are commonly called "ABA number" or

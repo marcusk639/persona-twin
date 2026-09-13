@@ -494,9 +494,9 @@ def test_account_november_stays_open():
 
 
 def test_guard_does_not_break_any_intended_qualifier_catch():
-    """The trailing-letter guard on no/num/nbr must not narrow the family it
-    was built to widen -- every phrasing from the gap-9 and gap-1 fixes,
-    plus the bare "number" word, must still fire."""
+    """The trailing-letter guard on number/no/num/nbr must not narrow the
+    family it was built to widen -- every phrasing from the gap-9 and
+    gap-1 fixes, plus the bare "number" word, must still fire."""
     for text in (
         "acct no. 12345678", "account no 12345678", "acct num 12345678",
         "account nbr 12345678", "routing no. 12345678", "a/c no 12345678",
@@ -516,6 +516,27 @@ def test_bare_number_word_alone_is_confidential():
     # nothing this could be confused with except the guarded "num" prefix
     # the test above already proves does NOT reach it.
     assert classify(_t("please read me back the routing number")) == "confidential"
+
+
+# "number" carries the identical prefix-swallowing risk as the short forms
+# it was found alongside: without its own trailing guard, it is a prefix of
+# "numbering" / "numbered" / "numberless" the same way "no" is a prefix of
+# "notes" / "now" / "nothing". Guarding only the short alternatives and
+# treating "number" as a safe, complete word was the same unswept-sibling
+# mistake this module has made before -- caught this time before it shipped
+# rather than by a later review round.
+
+
+def test_account_numbering_stays_open():
+    assert classify(_t("account numbering scheme needs review")) == "open"
+
+
+def test_account_numbered_stays_open():
+    assert classify(_t("the account numbered accounts twice")) == "open"
+
+
+def test_account_numberless_stays_open():
+    assert classify(_t("account numberless entries exist")) == "open"
 
 
 # Finding 1 (LOW): the phrase markers' \b bookends are correct (unlike the
