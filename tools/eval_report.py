@@ -8,7 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from persona_twin.eval.report import (pending_results, render, s2_self_distance,  # noqa: E402
-                                      s5_probe_composition, split_summary)
+                                      s5_probe_composition, s6_probe_composition,
+                                      split_summary)
 from persona_twin.paths import SubjectPaths  # noqa: E402
 
 
@@ -23,7 +24,8 @@ def main(subject_id: str, version: str) -> int:
     print(f"  quarantined  : {s['quarantined']:,}")
     print()
     results = [s2_self_distance(paths, version, now),
-              s5_probe_composition(paths)] + pending_results()
+              s5_probe_composition(paths),
+              s6_probe_composition(paths)] + pending_results()
     print(render(results))
     return 0
 

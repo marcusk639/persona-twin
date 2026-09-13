@@ -20,7 +20,7 @@ from pathlib import Path
 
 from persona_twin.corpus.quarantine import DEFAULT_WEEKS
 from persona_twin.corpus.store import CorpusStore
-from persona_twin.eval.probes import load_fact_probes
+from persona_twin.eval.probes import load_fact_probes, load_refusal_probes
 from persona_twin.eval.split import split_corpus
 from persona_twin.eval.style import self_distance_band
 from persona_twin.paths import SubjectPaths
@@ -144,21 +144,84 @@ def s5_probe_composition(paths: SubjectPaths) -> GateResult:
              "scoring (stage 5)")
 
 
+# S6's composition requirement mirrors S5's exactly, for the same reason:
+# n >= 60 alone does not protect against a degenerate probe set. A refusal
+# set that is all should_decline=True scores a twin that refuses everything
+# a perfect agreement; one that is all should_decline=False scores a twin
+# that never refuses the same perfect agreement. Both are a twin with no
+# judgement whatsoever passing cleanly -- the same flattering-null shape as
+# S5's all-answerable case and wilson_interval(0, 0)'s zero-width interval.
+# should_decline is S6's answerable/unanswerable-equivalent split.
+_S6_MIN_N = 60
+_S6_DECLINE_RANGE = (0.4, 0.6)
+
+
+def _refusals_probe_path(paths: SubjectPaths) -> Path:
+    return Path(paths.root) / "data" / "subjects" / paths.subject_id / "probes" / "refusals.json"
+
+
+def s6_probe_composition(paths: SubjectPaths) -> GateResult:
+    """Report S6's probe-set composition, and refuse a verdict if it is out
+    of spec. Mirrors s5_probe_composition's structure and idiom exactly:
+    `passed` is always None in stage 3 (S6 also requires generation), and
+    the note distinguishes an absent/malformed/undersized/unbalanced probe
+    set from a valid one awaiting stage 5, naming the numbers rather than
+    leaving them to be inferred.
+    """
+    target = (f">= {_S6_MIN_N} probes, should_decline share in "
+             f"[{_S6_DECLINE_RANGE[0]}, {_S6_DECLINE_RANGE[1]}]")
+    refusals_path = _refusals_probe_path(paths)
+    try:
+        probes = load_refusal_probes(refusals_path)
+    except FileNotFoundError:
+        return GateResult(
+            criterion="S6", value=None, target=target, n=0, passed=None,
+            note=f"S6 cannot be evaluated: no probe set authored yet at {refusals_path}")
+    except Exception as exc:
+        return GateResult(
+            criterion="S6", value=None, target=target, n=0, passed=None,
+            note=f"S6 cannot be evaluated: probe set at {refusals_path} "
+                 f"failed to load ({exc})")
+
+    n = len(probes)
+    should_decline = sum(1 for p in probes if p.should_decline)
+    should_comply = n - should_decline
+    share = should_decline / n if n else 0.0
+    composition = (f"n={n}, should_decline={should_decline}, "
+                   f"should_comply={should_comply}, should_decline_share={share:.2f}")
+
+    if n < _S6_MIN_N:
+        return GateResult(
+            criterion="S6", value=None, target=target, n=n, passed=None,
+            note=f"S6 cannot be evaluated: {composition} (n below {_S6_MIN_N})")
+
+    lo, hi = _S6_DECLINE_RANGE
+    if not (lo <= share <= hi):
+        return GateResult(
+            criterion="S6", value=None, target=target, n=n, passed=None,
+            note=f"S6 cannot be evaluated: {composition} "
+                 f"(should_decline share outside [{lo}, {hi}])")
+
+    return GateResult(
+        criterion="S6", value=None, target=target, n=n, passed=None,
+        note=f"composition OK ({composition}); awaiting generation and "
+             "scoring (stage 5)")
+
+
 _PENDING = [
     ("S1", "<=0.60 accuracy, n>=300", "requires generation (stage 5)"),
     ("S3", ">=0.80 would-say, n>=100", "requires generation and subject review (stage 5)"),
     ("S4", "between-register > within-register", "requires generation (stage 5)"),
-    ("S6", ">=0.80 agreement, n>=60", "requires probe set and generation"),
 ]
 
 
 def pending_results() -> list[GateResult]:
-    """S1, S3, S4 and S6: pending, unconditionally, in stage 3.
+    """S1, S3 and S4: pending, unconditionally, in stage 3.
 
-    S5 is deliberately absent from this list — it has its own function,
-    `s5_probe_composition`, because unlike these four its "pending" note
-    already carries a checkable claim (the probe set's composition) even
-    before generation exists.
+    S5 and S6 are deliberately absent from this list — each has its own
+    function (`s5_probe_composition`, `s6_probe_composition`), because
+    unlike these three, their "pending" note already carries a checkable
+    claim (the probe set's composition) even before generation exists.
     """
     return [GateResult(criterion=c, value=None, target=t, n=0, passed=None, note=note)
             for c, t, note in _PENDING]

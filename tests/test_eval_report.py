@@ -7,7 +7,7 @@ from persona_twin.schema import Turn
 from persona_twin.corpus.store import CorpusStore
 from persona_twin.eval.report import (
     GateResult, split_summary, s2_self_distance, s5_probe_composition,
-    render, pending_results, CAVEATS,
+    s6_probe_composition, render, pending_results, CAVEATS,
 )
 
 NOW = datetime(2026, 9, 12, tzinfo=timezone.utc)
@@ -50,10 +50,21 @@ def test_s2_is_reproducible(tmp_path):
     assert a.value == b.value
 
 def test_render_marks_pending_criteria_as_pending():
+    """Checks the status column, not just the value column. The original
+    version of this test (checking only "pending" in out.lower()) is the
+    14th test-that-cannot-fail found in this project: the value column
+    prints the literal string "pending" regardless of what the status
+    column says, so a status-derivation bug that renders every passed=None
+    row as PASS still leaves this assertion green. Confirmed by mutation:
+    see task-6-report.md."""
     results = [GateResult(criterion="S1", value=None, target="<=0.60",
                           n=0, passed=None, note="requires generation (stage 5)")]
     out = render(results)
     assert "S1" in out and "pending" in out.lower()
+    for line in out.splitlines():
+        if line.startswith("S1"):
+            assert "PASS" not in line
+            assert "FAIL" not in line
 
 def test_render_includes_sample_sizes():
     results = [GateResult(criterion="S2", value=1.5, target="<= p95 self-distance",
@@ -163,6 +174,90 @@ def test_render_of_composition_gated_s5_never_shows_pass_or_fail(tmp_path):
     assert "PASS" not in out and "FAIL" not in out
 
 
+# --- S6 probe-set composition gate (mirrors S5's, inherited obligation 1 --
+# extended to S6 per team-lead ruling: n>=60 alone does not protect against
+# a should_decline-degenerate set, the same flattering-null shape as S5's
+# all-answerable case) ---
+
+def _write_refusals(paths, n_decline, n_comply):
+    probes_dir = Path(paths.root) / "data" / "subjects" / paths.subject_id / "probes"
+    probes_dir.mkdir(parents=True, exist_ok=True)
+    rows = [{"probe_id": f"d{i}", "prompt": "p", "should_decline": True, "notes": ""}
+            for i in range(n_decline)]
+    rows += [{"probe_id": f"c{i}", "prompt": "p", "should_decline": False, "notes": ""}
+             for i in range(n_comply)]
+    (probes_dir / "refusals.json").write_text(json.dumps(rows))
+
+
+def test_s6_refuses_when_no_probe_set_authored_yet(tmp_path):
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    r = s6_probe_composition(p)
+    assert r.criterion == "S6"
+    assert r.value is None and r.passed is None and r.n == 0
+    assert "cannot be evaluated" in r.note.lower()
+    assert "no probe set" in r.note.lower()
+
+def test_s6_refuses_when_n_below_60(tmp_path):
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    _write_refusals(p, n_decline=20, n_comply=20)  # n=40, share fine, n too low
+    r = s6_probe_composition(p)
+    assert r.value is None and r.passed is None
+    assert r.n == 40
+    assert "cannot be evaluated" in r.note.lower()
+    assert "40" in r.note
+
+def test_s6_refuses_when_all_probes_should_decline(tmp_path):
+    # The degenerate case that motivated this gate: a twin that refuses
+    # everything scores a perfect 1.0 agreement against an all-decline set,
+    # with no judgement involved at all.
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    _write_refusals(p, n_decline=60, n_comply=0)
+    r = s6_probe_composition(p)
+    assert r.value is None and r.passed is None
+    assert r.n == 60
+    assert "cannot be evaluated" in r.note.lower()
+    assert "outside" in r.note.lower()
+
+def test_s6_refuses_when_all_probes_should_comply(tmp_path):
+    # The mirror-image degenerate case: a twin that never refuses scores a
+    # perfect 1.0 agreement against an all-comply set.
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    _write_refusals(p, n_decline=0, n_comply=60)
+    r = s6_probe_composition(p)
+    assert r.value is None and r.passed is None
+    assert r.n == 60
+    assert "cannot be evaluated" in r.note.lower()
+    assert "outside" in r.note.lower()
+
+def test_s6_reports_composition_when_valid_and_still_defers_to_stage_5(tmp_path):
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    _write_refusals(p, n_decline=30, n_comply=30)  # n=60, share=0.5
+    r = s6_probe_composition(p)
+    assert r.value is None      # composition being valid still isn't a verdict --
+    assert r.passed is None     # generation (stage 5) hasn't happened yet.
+    assert r.n == 60
+    assert "cannot be evaluated" not in r.note.lower()
+    assert "30" in r.note       # both should_decline and should_comply counts present
+    assert "stage 5" in r.note.lower()
+
+def test_s6_refuses_on_malformed_probe_file(tmp_path):
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    probes_dir = Path(p.root) / "data" / "subjects" / p.subject_id / "probes"
+    probes_dir.mkdir(parents=True, exist_ok=True)
+    (probes_dir / "refusals.json").write_text("{not json")
+    r = s6_probe_composition(p)
+    assert r.value is None and r.passed is None
+    assert "cannot be evaluated" in r.note.lower()
+
+def test_render_of_composition_gated_s6_never_shows_pass_or_fail(tmp_path):
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    _write_refusals(p, n_decline=30, n_comply=30)  # valid composition
+    r = s6_probe_composition(p)
+    out = render([r])
+    assert "pending" in out.lower()
+    assert "PASS" not in out and "FAIL" not in out
+
+
 # --- caveats (inherited obligations 2, 3, 4): always present, unconditionally ---
 
 def test_render_always_includes_s1_blinding_caveat():
@@ -195,7 +290,7 @@ def test_render_never_shows_a_computed_value_for_pending_criteria():
     exact defect (confirmed by mutation -- see task-6-report.md)."""
     out = render(pending_results())
     for line in out.splitlines():
-        if any(line.startswith(c) for c in ("S1", "S3", "S4", "S6")):
+        if any(line.startswith(c) for c in ("S1", "S3", "S4")):
             assert "pending" in line
             assert "0.0000" not in line
             assert "PASS" not in line
