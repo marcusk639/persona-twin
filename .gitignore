@@ -12,3 +12,6 @@ config/subjects/*.yaml
 
 # Generated session digests: contain subject name, emails, firm name (see name_leak_lint)
 docs/timeline-weeks/
+
+# Scratch: raw session timeline dumps contain identity and account emails
+.scratch/
