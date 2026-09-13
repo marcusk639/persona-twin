@@ -58,5 +58,7 @@ def _subject_authored(thread_key: str):
 
 register("imessage", _imessage)
 register("claude_code", _subject_authored("file"))
+register("claude_ai", _subject_authored("conversation_uuid"))
+register("perplexity", _subject_authored("context_uuid"))
 register("git_repos", _subject_authored("repo"))
 register("mail", _subject_authored("to"))
