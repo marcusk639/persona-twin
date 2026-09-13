@@ -350,14 +350,24 @@ def test_acct_num_qualifier_is_confidential():
 
 
 def test_account_no_longer_is_an_accepted_false_positive():
-    """Reported honestly, like the bare-digit-run false positives above: the
-    bare "no" qualifier the gap-9 fix requires (per the review's own
-    "account no 12345678" example) cannot be distinguished from ordinary
-    English "no longer" / "no more" without a digit nearby. Measured on the
-    real corpus: 2 of 85,330 turns newly flagged this way, versus 45 from
-    the gap-7 fix -- accepted under the same asymmetric cost model as the
-    bare 9-17 digit marker's existing phone-number and timestamp false
-    positives (see the tests above)."""
+    """Reported honestly, like the bare-digit-run false positives above: a
+    standalone "no" qualifier (per the review's own "account no 12345678"
+    example, required to catch it) is followed by a SPACE here, then an
+    unrelated word -- "no" as its own complete word cannot be distinguished
+    from ordinary English "no longer" / "no more" without a digit nearby,
+    and no trailing-letter guard can fix that (the guard only rejects "no"
+    glued directly onto a following word with no space, see the
+    prefix-swallowing tests below).
+
+    Corrected attribution, on re-review: the original 2-of-85,330 corpus
+    turns cited as this trade-off's cost were NOT this case -- they were
+    "account notifications" and "account \\nnow", both prefix-swallowing
+    (a letter glued directly onto "no" with no space), which the guard
+    below now closes for free. This exact standalone-word case, the one
+    this test actually documents, costs 0 additional turns in the real
+    corpus today; the trade-off is accepted here as a matter of principle
+    (a bare "no" this specific and this word-bounded could still appear in
+    a larger or different corpus), not because it is currently paid."""
     assert classify(_t("the account no longer has any activity")) == "confidential"
 
 
@@ -448,3 +458,117 @@ def test_grouped_account_still_confidential_with_a_space_before_it():
     # already-working path can't regress while the glued-prefix cases above
     # are being fixed.
     assert classify(_t("acct 4093-8172-6354 needs updating")) == "confidential"
+
+
+# --- Round 5: qualifier-family false positives, phrase-\b pinning, and the
+# noun-direct-digits connector axis, found by a second independent pass ---
+
+
+# Finding 4 (MEDIUM, live): a bare "no"/"num"/"nbr" with nothing after it
+# to say the match should stop there is a prefix of ordinary English words.
+# Each of these was measured confidential before the trailing-letter guard.
+
+
+def test_account_notes_stays_open():
+    assert classify(_t("account notes are attached")) == "open"
+
+
+def test_account_now_stays_open():
+    assert classify(_t("account now please")) == "open"
+
+
+def test_acct_nothing_stays_open():
+    assert classify(_t("acct nothing to report")) == "open"
+
+
+def test_routing_normally_stays_open():
+    assert classify(_t("routing normally takes a week")) == "open"
+
+
+def test_a_slash_c_not_stays_open():
+    assert classify(_t("a/c not needed")) == "open"
+
+
+def test_account_november_stays_open():
+    assert classify(_t("account november filing")) == "open"
+
+
+def test_guard_does_not_break_any_intended_qualifier_catch():
+    """The trailing-letter guard on no/num/nbr must not narrow the family it
+    was built to widen -- every phrasing from the gap-9 and gap-1 fixes,
+    plus the bare "number" word, must still fire."""
+    for text in (
+        "acct no. 12345678", "account no 12345678", "acct num 12345678",
+        "account nbr 12345678", "routing no. 12345678", "a/c no 12345678",
+        "account number is on file", "acct #12345678",
+    ):
+        assert classify(_t(text)) == "confidential", text
+
+
+# Finding 3 (LOW): "number" was dead code before the guard -- "num\.?" with
+# no trailing check silently swallowed it. The guard above makes it
+# unreachable via "num" alone again (the guard rejects "num" followed by
+# "ber"), so "number" must stay in the alternation, not be removed.
+
+
+def test_bare_number_word_alone_is_confidential():
+    # Isolates "number" specifically: no period, no other qualifier present,
+    # nothing this could be confused with except the guarded "num" prefix
+    # the test above already proves does NOT reach it.
+    assert classify(_t("please read me back the routing number")) == "confidential"
+
+
+# Finding 1 (LOW): the phrase markers' \b bookends are correct (unlike the
+# digit-shape patterns, the ambiguous side here is the NOUN) but nothing
+# asserted it -- deleting either \b left the whole suite green before these.
+
+
+def test_rerouting_number_stays_open():
+    assert classify(_t("rerouting number for this transfer")) == "open"
+
+
+def test_subaccount_number_stays_open():
+    assert classify(_t("subaccount number listed")) == "open"
+
+
+def test_myaccount_hash_stays_open():
+    assert classify(_t("myaccount #123 is active")) == "open"
+
+
+# Gap 12, partial (deliberately narrow): a noun connected directly to a bare
+# number via a colon or plain whitespace, with no qualifier word at all.
+# Slash-as-connector and last-4-digit "ending in" disclosure were both
+# considered and rejected -- zero corpus exposure and unmeasured new risk
+# for the former, an explicit prior decline for the latter.
+
+
+def test_acct_colon_bare_digits_is_confidential():
+    assert classify(_t("acct: 12345678")) == "confidential"
+
+
+def test_account_colon_bare_digits_is_confidential():
+    assert classify(_t("account: 12345678")) == "confidential"
+
+
+def test_bare_acct_directly_followed_by_digits_is_confidential():
+    assert classify(_t("bank acct 12345678 is the one to use")) == "confidential"
+
+
+def test_aba_number_phrase_is_confidential():
+    # "aba" joins "routing" as a noun for the SAME qualifier family --
+    # "ABA number" is the standard name for a routing number.
+    assert classify(_t("the aba number is on the check")) == "confidential"
+
+
+def test_aba_direct_digits_is_confidential():
+    # Deliberately fewer than 9 digits: a 9+ digit number here would also
+    # satisfy the unrelated bare-digit-run marker on its own, making this
+    # test pass regardless of whether the noun-direct-digits marker fires
+    # at all. This isolates the marker actually under test.
+    assert classify(_t("aba: 2100")) == "confidential"
+
+
+def test_bare_acct_without_any_digits_stays_open():
+    # The noun-direct-digits marker must not fire on the noun alone --
+    # digits are what distinguish this from ordinary mentions of "acct".
+    assert classify(_t("let's acct for the discrepancy next quarter")) == "open"

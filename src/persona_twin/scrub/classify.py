@@ -61,7 +61,50 @@ _SEP = r"[-. ]\s{0,4}"
 # qualifier, not a different marker. Sharing this fragment between the
 # routing and account patterns means a future addition to the family (or a
 # fix to one) can't be made to only one of them by accident.
-_QUALIFIER = r"(?:number|no\.?|num\.?|nbr\.?|#)"
+#
+# Each short alternative -- "no", "num", "nbr" -- carries a trailing
+# `(?![a-zA-Z])` guard: without it, "no" alone is a prefix of ordinary
+# English words ("notes", "now", "nothing", "normally", "not", "november"),
+# and "account notes are attached" or "routing normally takes a week" would
+# read as confidential purely because "no" happens to start the next word,
+# with nothing after it to say the match should have stopped there. The
+# guard rejects exactly the prefix-swallowing case (no letter immediately
+# glued on) while leaving the genuinely ambiguous case untouched: "the
+# account no longer has any activity" still matches, because "no" there is
+# followed by a SPACE, not by "nger" -- that collision is inherent to a bare
+# "no" qualifier (see the accepted-false-positive test below) and the guard
+# was never meant to close it, only the avoidable half.
+#
+# "number" stays in the alternation even though "num" is a prefix of it:
+# without the guard, "num\.?" alone silently swallowed "number" too (making
+# the "number" alternative dead code), but the guard's negative lookahead
+# now rejects "num" followed by the letters "ber" the same way it rejects
+# "no" followed by "tes" -- so "number" is reachable again, and removing it
+# would silently reopen "account number is on file" and every other bare
+# "number" phrasing.
+_QUALIFIER = r"(?:number|no\.?(?![a-zA-Z])|num\.?(?![a-zA-Z])|nbr\.?(?![a-zA-Z])|#)"
+
+# Routing and ABA are the same concept under two names -- ABA (American
+# Bankers Association) routing numbers are commonly called "ABA number" or
+# "ABA #" without ever using the word "routing" at all.
+_ROUTING_NOUN = r"(?:routing|aba)"
+_ACCOUNT_NOUN = r"(?:account|acct\.?|a/c)"
+
+# A noun connected DIRECTLY to a bare number, with a colon or nothing at all
+# between them and no qualifier word required: "acct: 12345678", "account:
+# 12345678", "bank acct 12345678". Deliberately narrow and measured, not a
+# general connector sweep -- a colon and plain whitespace are the two cheap,
+# zero-risk cases; a slash was considered and rejected (zero corpus
+# exposure, and it risks matching ordinary date shapes like "acct/2026"),
+# and "ending in NNNN" last-4-digit disclosure was considered and rejected
+# (23 turns, and the review that found it declined to recommend closing it).
+# \d{4,} is deliberately much lower than the bare-digit-run marker's 9-digit
+# floor: an explicit noun immediately before the number is already doing
+# the discriminating work a bare digit run can't, so a short account number
+# doesn't need the same protection against ordinary dates/phone numbers
+# that justifies the higher floor elsewhere in this module.
+_NOUN_DIRECT_DIGITS = re.compile(
+    rf"\b(?:{_ROUTING_NOUN}|{_ACCOUNT_NOUN})\s*:?\s*\d{{4,}}\b", re.I)
 
 # No \b bookends on any of the four digit-shape patterns below: a boundary
 # requires a transition between a "word" and a "non-word" character, and a
@@ -80,12 +123,26 @@ _QUALIFIER = r"(?:number|no\.?|num\.?|nbr\.?|#)"
 # bookends (a specific-shape pattern doesn't need them for the same reason
 # \d{9,} doesn't: the separator characters and group lengths already fix
 # where the match starts and ends).
+# KNOWN, NOT FIXED: boundary-free \d{9,} was measured (20,000 simulated
+# samples per shape) to flag 17.9% of random 40-character hex git SHAs and
+# 13.5% of random UUIDs, against 0.00% with the \b bookends this module used
+# to have -- base64 tokens are unaffected. There is no live corpus impact
+# today (44 turns carry a hex-looking token >= 20 chars, none of which
+# currently flags), but git_repos is a live source and this will degrade as
+# more git history is ingested. Recorded here rather than fixed: no
+# proposed fix was judged worth its own false-positive cost at review time.
 _MARKERS: list[re.Pattern[str]] = [
     re.compile(rf"\d{{3}}{_SEP}\d{{2}}{_SEP}\d{{4}}"),      # SSN, separated
     re.compile(rf"\d{{2}}{_SEP}\d{{7}}"),                  # EIN, separated
     re.compile(r"\d{9,}"),                                    # bare digit run, unbounded above, unbounded adjacency
     re.compile(rf"\d{{4}}{_SEP}\d{{4}}{_SEP}\d{{4}}(?:{_SEP}\d{{1,4}})?"),  # grouped account/card
-    re.compile(rf"\brouting\s*{_QUALIFIER}", re.I),
+    # These two keep their \b bookends, unlike the digit-shape patterns
+    # above: the ambiguous side here is the NOUN, not a digit run, and a
+    # noun mid-word is exactly what \b is for -- without it, "rerouting
+    # number", "subaccount number" and "myaccount #123" would all match on
+    # substring alone. Verified by mutation (see test_classify.py): deleting
+    # either \b is caught by a dedicated test, not left to pass silently.
+    re.compile(rf"\b{_ROUTING_NOUN}\s*{_QUALIFIER}", re.I),
     # "account" alone missed the common CPA-office abbreviations "acct" and
     # "a/c" (e.g. "acct #12345678"). Deliberately NOT including bare "act":
     # this is a tax practice's data, where "the Act" (Tax Cuts and Jobs Act,
@@ -93,7 +150,8 @@ _MARKERS: list[re.Pattern[str]] = [
     # vocabulary, not account references -- adding it would trade a content
     # false-negative for a source-of-truth false-positive on real
     # discussion of legislation, not close the hole it's meant to close.
-    re.compile(rf"\b(?:account|acct\.?|a/c)\s*{_QUALIFIER}", re.I),
+    re.compile(rf"\b{_ACCOUNT_NOUN}\s*{_QUALIFIER}", re.I),
+    _NOUN_DIRECT_DIGITS,
 ]
 
 # Unicode characters that behave like an ASCII separator but are not one,
