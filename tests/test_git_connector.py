@@ -93,3 +93,15 @@ def test_legitimately_empty_repo_still_succeeds_with_zero_envelopes(tmp_path):
     for _, cur in c.fetch(ctx, None):
         cursor = cur
     assert list(c.fetch(ctx, cursor)) == []
+
+def test_fresh_repo_with_no_commits_yet_returns_empty_without_raising(tmp_path):
+    # A third distinct situation, which must not collapse into either of the
+    # other two: `git log` fails here exactly as it does for a broken repo
+    # (no HEAD to walk), but the repo itself is real and readable -- adding
+    # a brand-new repo to a subject's config is a normal operator action,
+    # and this must not abort the ingest run.
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=fresh, check=True, capture_output=True)
+    c = GitConnector([fresh], ["alice@example.com"])
+    assert list(c.fetch(_ctx(tmp_path), None)) == []

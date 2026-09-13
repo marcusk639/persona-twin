@@ -37,6 +37,21 @@ class GitConnector:
             print(f"git_repos: {msg}", file=sys.stderr)
             return None, msg
 
+    def _is_valid_repo(self, repo: Path) -> bool:
+        """Structural check for "is this path a readable git repository",
+        used to tell a legitimate zero-commit repo apart from a broken or
+        missing one when `git log` fails. `git rev-parse --git-dir` succeeds
+        inside any repo, including a freshly initialised one with no
+        commits, and fails outside one -- a structural fact about the path,
+        not a parse of git's (localized, version-dependent) stderr text.
+        """
+        try:
+            subprocess.run(["git", "rev-parse", "--git-dir"], cwd=repo,
+                           check=True, capture_output=True, text=True)
+            return True
+        except (subprocess.CalledProcessError, OSError):
+            return False
+
     def _parse(self, out: str) -> list[tuple[str, str, str]]:
         rows = []
         for chunk in out.split("\x00"):
@@ -61,19 +76,30 @@ class GitConnector:
             # commits that would otherwise be stranded.
             out, err = self._run_log(repo, None)
         if out is None:
-            # Both attempts failed — a genuinely broken or missing repo
-            # (not a git repo, `.git` pruned, path unmounted, typo'd repo
-            # root). This must not be reported as "zero new commits": that
-            # is indistinguishable from a repo that legitimately had
-            # nothing new, and run_connector would write a false success
-            # to the ledger, which is this project's provenance audit
-            # trail. Raising instead is cheap: run_connector leaves the
-            # per-repo cursor at its previous value on any exception
-            # (connectors/base.py), and re-running after the repo is
-            # fixed re-ingests nothing already written, because
-            # VaultWriter dedupes on (subject_id, source, source_id) and
-            # source_id here is the bare commit SHA (see fetch() below) —
-            # so the retry costs only time.
+            # Both attempts failed. Two situations look identical to `git
+            # log` and must not be conflated: a genuinely broken or missing
+            # repo (not a git repo, `.git` pruned, path unmounted, typo'd
+            # repo root), and a legitimate, freshly initialised repo that
+            # simply has no commits yet -- `git log` fails there too, with
+            # no HEAD to walk. Only the first case is a failure.
+            if self._is_valid_repo(repo):
+                # A real repo with zero commits ever. Adding a brand-new
+                # repo to a subject's config is a normal operator action;
+                # aborting the whole ingest run over it would be a false
+                # alarm, and false alarms are how a fail-loud design gets
+                # switched off by the person it's supposed to protect.
+                return []
+            # Not a readable repository at all. This must not be reported
+            # as "zero new commits": that is indistinguishable from a repo
+            # that legitimately had nothing new, and run_connector would
+            # write a false success to the ledger, which is this project's
+            # provenance audit trail. Raising instead is cheap:
+            # run_connector leaves the per-repo cursor at its previous
+            # value on any exception (connectors/base.py), and re-running
+            # after the repo is fixed re-ingests nothing already written,
+            # because VaultWriter dedupes on (subject_id, source,
+            # source_id) and source_id here is the bare commit SHA (see
+            # fetch() below) — so the retry costs only time.
             raise RuntimeError(
                 f"git_repos: {repo!s} is unreadable, aborting this ingest "
                 f"run rather than reporting a false zero-new-commits "
