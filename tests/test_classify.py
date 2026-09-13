@@ -424,3 +424,27 @@ def test_ein_confidential_when_prefixed_by_a_letter():
 
 def test_ein_confidential_when_suffixed_by_a_letter():
     assert classify(_t("reference 12-3456789z on the 1120S")) == "confidential"
+
+
+# --- Round 4: boundary fix extended to the grouped-account/card pattern ---
+# (the earlier "already safe" check used a space-separated prefix, which
+# has a boundary regardless of \b; a directly-glued prefix does not).
+
+
+def test_grouped_account_confidential_when_glued_to_a_label_no_space():
+    assert classify(_t("acct4093-8172-6354 needs updating")) == "confidential"
+
+
+def test_grouped_account_confidential_when_prefixed_by_a_bare_letter():
+    assert classify(_t("see x4093-8172-6354 on the statement")) == "confidential"
+
+
+def test_grouped_account_confidential_when_joined_by_underscore():
+    assert classify(_t("field id_4093-8172-6354 in the export")) == "confidential"
+
+
+def test_grouped_account_still_confidential_with_a_space_before_it():
+    # The case the earlier check actually verified -- pinned so this
+    # already-working path can't regress while the glued-prefix cases above
+    # are being fixed.
+    assert classify(_t("acct 4093-8172-6354 needs updating")) == "confidential"
