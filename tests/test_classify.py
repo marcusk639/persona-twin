@@ -400,3 +400,27 @@ def test_source_merely_containing_karbon_is_not_matched():
     # in the source name -- an unrelated source name should not collide.
     assert classify(_t("anything", source="unkarbon")) == "open"
     assert classify(_t("anything", source="prekarbon_thing")) == "open"
+
+
+# --- Round 3: gap 7's boundary fix extended to SSN and EIN, on review ---
+# (grouped-account/card deliberately left alone -- see the module comment).
+
+
+def test_ssn_confidential_when_prefixed_by_a_letter():
+    assert classify(_t("ref123-45-6789 on the form")) == "confidential"
+
+
+def test_ssn_confidential_when_suffixed_by_a_letter():
+    assert classify(_t("filed under 123-45-6789x")) == "confidential"
+
+
+def test_ssn_confidential_when_joined_by_underscore():
+    assert classify(_t("field id_123-45-6789 in the export")) == "confidential"
+
+
+def test_ein_confidential_when_prefixed_by_a_letter():
+    assert classify(_t("see x12-3456789 on the filing")) == "confidential"
+
+
+def test_ein_confidential_when_suffixed_by_a_letter():
+    assert classify(_t("reference 12-3456789z on the 1120S")) == "confidential"

@@ -63,17 +63,25 @@ _SEP = r"[-. ]\s{0,4}"
 # fix to one) can't be made to only one of them by accident.
 _QUALIFIER = r"(?:number|no\.?|num\.?|nbr\.?|#)"
 
+# No \b bookends on the SSN, EIN or bare-digit-run patterns below: a
+# boundary requires a transition between a "word" and a "non-word"
+# character, and a letter or underscore is ALSO a word character, so
+# \b\d{9,}\b cannot match "ID123456789", "123456789Z" or "acct_123456789"
+# at all, and \b\d{3}[-. ]\d{2}[-. ]\d{4}\b equally cannot match
+# "ref123-45-6789" or "id_123-45-6789" -- the run is simply never bounded
+# on that side, for a letter-prefixed SSN exactly as much as for a bare
+# digit run. Each pattern still finds its shape wherever it appears without
+# the bookends (a specific-shape pattern doesn't need them for the same
+# reason \d{9,} doesn't: the separator characters and group lengths already
+# fix where the match starts and ends).
+#
+# The grouped account/card pattern keeps its \b bookends: a letter-prefixed
+# instance of that shape was checked and already matches correctly (its
+# separators anchor it), so removing them there would be unmeasured scope
+# for no gain.
 _MARKERS: list[re.Pattern[str]] = [
-    re.compile(rf"\b\d{{3}}{_SEP}\d{{2}}{_SEP}\d{{4}}\b"),      # SSN, separated
-    re.compile(rf"\b\d{{2}}{_SEP}\d{{7}}\b"),                  # EIN, separated
-    # No \b bookends: a boundary requires a transition between a "word" and
-    # a "non-word" character, and a letter or underscore is ALSO a word
-    # character, so \b\d{9,}\b cannot match "ID123456789", "123456789Z" or
-    # "acct_123456789" at all -- the digit run is simply never bounded on
-    # that side. \d{9,} without \b still finds the maximal contiguous digit
-    # run wherever it appears (regex quantifiers are greedy by default), so
-    # dropping both bookends closes the family rather than the one shape
-    # that happens to have whitespace or punctuation on both sides.
+    re.compile(rf"\d{{3}}{_SEP}\d{{2}}{_SEP}\d{{4}}"),      # SSN, separated
+    re.compile(rf"\d{{2}}{_SEP}\d{{7}}"),                  # EIN, separated
     re.compile(r"\d{9,}"),                                    # bare digit run, unbounded above, unbounded adjacency
     re.compile(rf"\b\d{{4}}{_SEP}\d{{4}}{_SEP}\d{{4}}(?:{_SEP}\d{{1,4}})?\b"),  # grouped account/card
     re.compile(rf"\brouting\s*{_QUALIFIER}", re.I),
