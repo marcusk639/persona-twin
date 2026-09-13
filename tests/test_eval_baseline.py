@@ -4,9 +4,19 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from persona_twin.config import SubjectConfig
 from persona_twin.eval.baseline import (
-    NAIVE_BASELINE, INFORMED_BASELINE, BaselineConfig, baseline_fingerprint,
+    NAIVE_BASELINE, BaselineConfig, MissingOccupation, baseline_fingerprint,
+    informed_baseline,
 )
+
+
+def _cfg(name="Jordan Rivers", occupation="architect"):
+    return SubjectConfig(subject_id="subject-test", display_name=name,
+                         occupation=occupation)
+
+
+INFORMED_BASELINE = informed_baseline(_cfg())
 
 
 def test_naive_prompt_contains_no_identity():
@@ -24,9 +34,46 @@ def test_informed_baseline_names_the_subject_and_occupation():
     # occupation, not occupation alone -- an informed baseline missing the
     # name is weaker than the real thing it stands in for, which widens the
     # naive/informed gap artificially and flatters any twin scored against it.
-    p = INFORMED_BASELINE.system_prompt
-    assert "Marcus Klein" in p
-    assert "accountant" in p.lower()
+    p = informed_baseline(_cfg()).system_prompt
+    assert "Jordan Rivers" in p
+    assert "architect" in p.lower()
+
+
+def test_informed_prompt_derives_from_config_not_a_literal():
+    """Two subjects must yield two prompts -- the guard against re-hardcoding.
+
+    A hardcoded name passes every assertion about one subject's prompt; only
+    varying the config catches it. This is what keeps subject identity in
+    git-ignored config, where tools/name_leak_lint.py expects it.
+    """
+    a = informed_baseline(_cfg("Ada Fielding", "botanist")).system_prompt
+    b = informed_baseline(_cfg("Rex Calloway", "welder")).system_prompt
+    assert a != b
+    assert "Ada Fielding" in a and "Ada Fielding" not in b
+    assert "botanist" in a and "welder" in b
+
+
+def test_informed_baseline_refuses_a_subject_with_no_occupation():
+    """Fail loudly rather than emit a weaker informed baseline.
+
+    Silently dropping the occupation makes the informed baseline weaker than
+    the thing it stands in for, which widens the naive/informed gap and
+    flatters any twin scored against it -- the flattering direction, so it
+    must raise instead of degrade.
+    """
+    with pytest.raises(MissingOccupation):
+        informed_baseline(_cfg(occupation=None))
+
+
+def test_informed_prompt_keeps_its_pinned_wording():
+    """The template is pinned; rewording it makes a different baseline.
+
+    Asserted on a placeholder subject so no real identity enters tracked
+    tests. The real subject's fingerprint continuity is verified against
+    git-ignored config, not here.
+    """
+    assert (informed_baseline(_cfg("Ada Fielding", "botanist")).system_prompt
+            == "You are replying as Ada Fielding, an botanist. Reply to this message.")
 
 
 def test_baselines_pin_sampling_parameters():

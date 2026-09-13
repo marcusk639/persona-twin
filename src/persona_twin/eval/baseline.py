@@ -19,11 +19,17 @@ These are pinned. Changing a model version or a sampling parameter makes a
 different baseline, and every delta measured against the old one becomes
 meaningless — so rename rather than edit, and let the fingerprint prove it.
 
-Single-subject scope note: config/subjects/subject-01.yaml is the only
-subject record this project has, and it carries no occupation field, so the
-subject's name and occupation are pinned here as literals rather than read
-from config at call time. When this harness grows a second subject, this
-module should take both as parameters instead of hardcoding them.
+Subject identity is NOT stored here. Name and occupation are read from the
+subject's git-ignored `SubjectConfig`, so this module stays free of any one
+person's details -- which is what `tools/name_leak_lint.py` enforces and what
+makes the harness reusable for a second subject (spec §13). The naive
+baseline is a module constant because it contains no identity at all; the
+informed one is a function of a config, because it necessarily does.
+
+Pinning still applies: the template wording below is part of the baseline.
+Rewording it makes a different baseline and invalidates every delta measured
+against the old one, so rename rather than edit and let the fingerprint prove
+it.
 """
 from __future__ import annotations
 
@@ -31,10 +37,22 @@ import hashlib
 
 from pydantic import BaseModel, ConfigDict
 
-# Matches config/subjects/subject-01.yaml's display_name. See the module
-# docstring's single-subject scope note.
-_SUBJECT_NAME = "Marcus Klein"
-_SUBJECT_OCCUPATION = "accountant"
+from persona_twin.config import SubjectConfig
+
+
+class MissingOccupation(Exception):
+    """The subject config carries no occupation, which the informed baseline needs."""
+
+    def __init__(self, subject_id: str) -> None:
+        self.subject_id = subject_id
+        super().__init__(
+            f"subject {subject_id!r} has no occupation; the informed baseline "
+            "must name the subject AND their occupation (spec §7). Emitting "
+            "the name alone would make this baseline weaker than the thing it "
+            "stands in for, widening the naive/informed gap and flattering "
+            "any twin scored against it -- so this fails rather than degrades."
+        )
+
 
 _INFORMED_TEMPLATE = ("You are replying as {subject_name}, an {occupation}. "
                       "Reply to this message.")
@@ -57,14 +75,25 @@ NAIVE_BASELINE = BaselineConfig(
     system_prompt="Reply to this message.",
 )
 
-INFORMED_BASELINE = BaselineConfig(
-    name="informed-v1",
-    model="claude-sonnet-4-5-20250929",
-    temperature=1.0,
-    top_p=1.0,
-    system_prompt=_INFORMED_TEMPLATE.format(subject_name=_SUBJECT_NAME,
-                                            occupation=_SUBJECT_OCCUPATION),
-)
+def informed_baseline(config: SubjectConfig) -> BaselineConfig:
+    """The informed baseline for one subject, built from their git-ignored config.
+
+    A function rather than a module constant: the prompt necessarily contains
+    the subject's identity, and a constant would have to hardcode it here in
+    tracked source. Same pinned model and sampling parameters as the naive
+    baseline, so the only difference between the two is the identity in the
+    system prompt -- which is exactly what the naive/informed gap measures.
+    """
+    if not (config.occupation or "").strip():
+        raise MissingOccupation(config.subject_id)
+    return BaselineConfig(
+        name="informed-v1",
+        model="claude-sonnet-4-5-20250929",
+        temperature=1.0,
+        top_p=1.0,
+        system_prompt=_INFORMED_TEMPLATE.format(subject_name=config.display_name,
+                                                occupation=config.occupation),
+    )
 
 
 def baseline_fingerprint(cfg: BaselineConfig) -> str:

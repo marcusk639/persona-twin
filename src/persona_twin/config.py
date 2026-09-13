@@ -8,6 +8,11 @@ class SubjectConfig(BaseModel):
     display_name: str
     aliases: list[str] = []
     enabled_sources: list[str] = []
+    # Optional because it is needed only by the informed eval baseline; a
+    # subject can be ingested and scrubbed without one. Consumers that
+    # require it must fail loudly rather than substitute a default -- see
+    # eval.baseline.informed_baseline.
+    occupation: str | None = None
 
 def load_subject(subject_id: str, root: Path) -> SubjectConfig:
     path = Path(root) / "config" / "subjects" / f"{subject_id}.yaml"
