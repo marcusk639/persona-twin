@@ -9,3 +9,6 @@ config/subjects/*.yaml
 .claude/
 **/.claude/
 .token-optimizer/
+
+# Generated session digests: contain subject name, emails, firm name (see name_leak_lint)
+docs/timeline-weeks/
