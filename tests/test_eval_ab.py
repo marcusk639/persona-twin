@@ -120,6 +120,26 @@ def test_thread_cap_choice_is_reproducible_for_a_seed():
     assert a == b
 
 
+def test_thread_cap_choice_is_driven_by_the_seed_not_by_sort_order():
+    """Which reply a multi-reply thread contributes must come from the RNG.
+
+    `candidates[0]` -- always the source_id-first reply -- is deterministic,
+    reproducible for a seed, and passes every other test in this file, but it
+    systematically picks the earliest reply in each conversation. Those are
+    typically shorter and more formulaic, and short formulaic replies are the
+    easiest for a system to imitate, so the bias runs in the direction that
+    flatters S1. Two seeds choosing identically across 40 five-reply threads
+    has probability 5**-40; this is not a flaky assertion.
+    """
+    pairs = [_pair(f"{thread}-{i}", thread_id=f"t{thread}")
+             for thread in range(40) for i in range(5)]
+    cands = {p.reply.source_id: "cand" for p in pairs}
+    a = [t.trial_id for t in build_trials(pairs, cands, seed=21)]
+    b = [t.trial_id for t in build_trials(pairs, cands, seed=22)]
+    assert len(a) == len(b) == 40      # still one trial per thread
+    assert a != b
+
+
 def test_duplicate_pair_entries_do_not_double_count():
     pair = _pair("1")
     trials = build_trials([pair, pair], {"1": "candidate"}, seed=0)
@@ -148,6 +168,27 @@ def test_score_trials_on_zero_trials_reports_full_uncertainty():
     r = score_trials([], {})
     assert r.n == 0
     assert (r.ci_low, r.ci_high) == (0.0, 1.0)
+
+
+def test_score_trials_on_zero_trials_reports_no_accuracy_at_all():
+    """S1 passes at accuracy <= 0.60, so a bare 0.0 on an empty trial list is
+    a PASS computed from nothing. wilson_interval already refuses the same
+    shape by returning (0.0, 1.0); accuracy sat next to it as a confident
+    zero. None is the honest answer, and it makes the comparison raise rather
+    than silently succeed."""
+    r = score_trials([], {})
+    assert r.accuracy is None
+    with pytest.raises(TypeError):
+        assert r.accuracy <= 0.60        # S1's pass condition, on no data
+
+
+def test_accuracy_is_still_a_number_on_a_single_trial():
+    """The None is about having no observations, not about being cautious --
+    one trial is enough to compute an accuracy, and folding accuracy to None
+    whenever it is inconvenient would be its own defect."""
+    trials = build_trials([_pair("1")], {"1": "fake"}, seed=0)
+    r = score_trials(trials, {})
+    assert r.accuracy == 0.0 and r.n == 1
 
 
 # -- wilson_interval boundaries -----------------------------------------------

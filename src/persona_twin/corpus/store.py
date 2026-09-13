@@ -21,6 +21,24 @@ create table if not exists turns (
 create index if not exists idx_turns_version on turns(corpus_version);
 """
 
+class UnknownCorpusVersion(Exception):
+    """A corpus version that was never built was asked for by name.
+
+    `read` answers an unknown version with an empty list, which is the right
+    answer for a query but the wrong basis for a report: a mistyped version
+    renders as a corpus of zero turns, zero train, zero held out, zero
+    quarantined -- a plausible-looking report for a corpus that does not
+    exist. Callers that present numbers to a human raise this instead.
+    """
+
+    def __init__(self, version: str, known: list[str]) -> None:
+        self.version = version
+        self.known = known
+        super().__init__(
+            f"corpus version {version!r} does not exist; built versions are "
+            f"{known if known else 'none'}")
+
+
 class CorpusStore:
     """Versioned, immutable clean corpus — the single source of T1 truth (spec §6.1)."""
 

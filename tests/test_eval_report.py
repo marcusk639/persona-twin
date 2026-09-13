@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from persona_twin.paths import SubjectPaths
 from persona_twin.schema import Turn
-from persona_twin.corpus.store import CorpusStore
+from persona_twin.corpus.store import CorpusStore, UnknownCorpusVersion
 from persona_twin.eval.report import (
     GateResult, split_summary, s2_self_distance, s5_probe_composition,
     s6_probe_composition, render, pending_results, CAVEATS,
@@ -37,6 +39,26 @@ def test_split_summary_holds_out_a_nonzero_minority(tmp_path):
     p = _seed(tmp_path)
     s = split_summary(p, "v1", NOW)
     assert 0 < s["heldout"] < s["train"]
+
+def test_split_summary_refuses_a_version_that_was_never_built(tmp_path):
+    """A mistyped version used to render total 0 / train 0 / held out 0 /
+    quarantined 0 -- a complete, plausible report for a corpus that does not
+    exist. split_summary returns bare integers and has no way to say
+    "unevaluable", so it raises instead, and names the versions that do exist
+    so the typo is visible."""
+    p = _seed(tmp_path)
+    with pytest.raises(UnknownCorpusVersion) as exc:
+        split_summary(p, "v5", NOW)
+    assert "v5" in str(exc.value)
+    assert "v1" in str(exc.value)      # the version that does exist
+
+
+def test_split_summary_still_summarises_a_version_that_does_exist(tmp_path):
+    # Guards the refusal above from being over-eager: a real version must
+    # still report real counts.
+    p = _seed(tmp_path)
+    assert split_summary(p, "v1", NOW)["total"] == 200
+
 
 def test_s2_reports_a_sample_size(tmp_path):
     p = _seed(tmp_path)
@@ -87,6 +109,20 @@ def test_s2_on_nonexistent_corpus_version_does_not_report_a_flattering_zero(tmp_
     assert r.value is None
     assert r.n == 0
     assert "cannot be evaluated" in r.note.lower()
+
+def test_s2_names_a_missing_corpus_as_missing_not_as_empty(tmp_path):
+    """The refusal above and this one are different inputs and must not read
+    the same: "the version does not exist" is an operator typo, "the version
+    exists but is too thin" is a data problem. Collapsing both into "0 turns"
+    tells the reader to go looking for the wrong thing."""
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    CorpusStore(p)
+    missing = s2_self_distance(p, "does-not-exist", NOW)
+    assert "does not exist" in missing.note
+    real = _seed(tmp_path)
+    thin = s2_self_distance(real, "v1", NOW)
+    assert "does not exist" not in thin.note
+
 
 def test_s2_on_too_few_heldout_turns_does_not_report_a_flattering_zero(tmp_path):
     """PARTIAL DATA: a real corpus, but too thin (on any split of 3 turns,
@@ -155,6 +191,25 @@ def test_s5_reports_composition_when_valid_and_still_defers_to_stage_5(tmp_path)
     assert "cannot be evaluated" not in r.note.lower()
     assert "100" in r.note      # both answerable and unanswerable counts present
     assert "stage 5" in r.note.lower()
+
+def test_s5_note_does_not_swap_the_answerable_and_unanswerable_counts(tmp_path):
+    """The [0.4, 0.6] range is symmetric about 0.5, so swapping the two counts
+    leaves the GATE decision identical and only corrupts the note the subject
+    reads: a 112/88 set would be reported to them as 88 answerable and 112
+    unanswerable, and they would author the wrong probes to fix it. Needs an
+    asymmetric IN-RANGE composition -- the balanced 100/100 fixture cannot
+    tell the two apart, and the out-of-range fixtures never reach the note.
+
+    Asserted as one substring rather than two: "unanswerable=88" contains
+    "answerable=88", so checking the counts separately would pass under the
+    swap."""
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    _write_facts(p, n_answerable=112, n_unanswerable=88)   # share 0.44, in range
+    r = s5_probe_composition(p)
+    assert "cannot be evaluated" not in r.note.lower()     # in range, so the note is the payload
+    assert "answerable=112, unanswerable=88" in r.note
+    assert "unanswerable_share=0.44" in r.note
+
 
 def test_s5_refuses_on_malformed_probe_file(tmp_path):
     p = SubjectPaths("s", tmp_path); p.ensure()
@@ -240,6 +295,17 @@ def test_s6_reports_composition_when_valid_and_still_defers_to_stage_5(tmp_path)
     assert "30" in r.note       # both should_decline and should_comply counts present
     assert "stage 5" in r.note.lower()
 
+def test_s6_note_does_not_swap_the_decline_and_comply_counts(tmp_path):
+    """S6's mirror of the S5 case above, and for the same reason: the
+    [0.4, 0.6] range is symmetric, so only the printed note goes wrong."""
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    _write_refusals(p, n_decline=44, n_comply=56)          # share 0.44, in range
+    r = s6_probe_composition(p)
+    assert "cannot be evaluated" not in r.note.lower()
+    assert "should_decline=44, should_comply=56" in r.note
+    assert "should_decline_share=0.44" in r.note
+
+
 def test_s6_refuses_on_malformed_probe_file(tmp_path):
     p = SubjectPaths("s", tmp_path); p.ensure()
     probes_dir = Path(p.root) / "data" / "subjects" / p.subject_id / "probes"
@@ -256,6 +322,37 @@ def test_render_of_composition_gated_s6_never_shows_pass_or_fail(tmp_path):
     out = render([r])
     assert "pending" in out.lower()
     assert "PASS" not in out and "FAIL" not in out
+
+
+# --- finding 10: report output must not carry the operator's home directory ---
+
+def test_s5_note_names_the_probe_path_without_an_absolute_path(tmp_path):
+    """An absolute path here carries the operator's account name into text a
+    human reads, pastes and files -- the same leak docs/timeline-weeks/ and
+    .scratch/ are gitignored to prevent."""
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    r = s5_probe_composition(p)          # no probe set authored: note names the path
+    assert str(tmp_path) not in r.note
+    assert "probes/facts.json" in r.note.replace("\\", "/")
+
+def test_s6_note_names_the_probe_path_without_an_absolute_path(tmp_path):
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    r = s6_probe_composition(p)
+    assert str(tmp_path) not in r.note
+    assert "probes/refusals.json" in r.note.replace("\\", "/")
+
+def test_probe_load_failure_does_not_leak_an_absolute_path_either(tmp_path):
+    """The malformed-file branch interpolates the loader's own exception text,
+    and probes.py names the file it rejected -- so scrubbing only the path
+    this module formats would leave the absolute one leaking through here."""
+    p = SubjectPaths("s", tmp_path); p.ensure()
+    probes_dir = Path(p.root) / "data" / "subjects" / p.subject_id / "probes"
+    probes_dir.mkdir(parents=True, exist_ok=True)
+    (probes_dir / "facts.json").write_text(json.dumps({"not": "an array"}))
+    (probes_dir / "refusals.json").write_text(json.dumps({"not": "an array"}))
+    for r in (s5_probe_composition(p), s6_probe_composition(p)):
+        assert "failed to load" in r.note
+        assert str(tmp_path) not in r.note
 
 
 # --- caveats (inherited obligations 2, 3, 4): always present, unconditionally ---
@@ -277,6 +374,25 @@ def test_caveats_constant_names_both_inherited_limits():
     assert "blinding" in joined
     assert "classify" in joined
     assert "golden" in joined
+
+
+def test_render_always_includes_the_s2_sample_size_caveat():
+    """S2 is the only criterion that currently renders a NUMBER, and it
+    carried no caveat at all while S1 and classify() did. type_token_ratio is
+    the one field in the fingerprint that is not comparable across sample
+    sizes -- 0.085 over 35,693 turns against 0.175 over 3,454 for the same
+    writer -- and stage 5 will score a large held-out corpus against a much
+    smaller generated one. Stated where the reader sees the number."""
+    out = render([GateResult(criterion="S2", value=34.95, target="t", n=3454,
+                             passed=None, note="")])
+    lowered = out.lower()
+    assert "type_token_ratio" in lowered
+    assert "sample-size dependent" in lowered or "sample size" in lowered
+
+def test_s2_caveat_is_not_conditional_on_s2_being_in_the_report():
+    # Same standing-limitation posture as the other two: it must survive an
+    # empty results list, so no future caller can drop it by omitting the row.
+    assert "type_token_ratio" in render([]).lower()
 
 
 # --- an unevaluable criterion must never render as passing ---

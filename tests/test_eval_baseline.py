@@ -73,7 +73,38 @@ def test_informed_prompt_keeps_its_pinned_wording():
     git-ignored config, not here.
     """
     assert (informed_baseline(_cfg("Ada Fielding", "botanist")).system_prompt
-            == "You are replying as Ada Fielding, an botanist. Reply to this message.")
+            == "You are replying as Ada Fielding. Your occupation is botanist. "
+               "Reply to this message.")
+
+
+def test_informed_prompt_is_grammatical_for_any_occupation():
+    """The template carries no indefinite article, so it cannot be wrong for
+    one. "an {occupation}" reads correctly for "architect" and wrongly for
+    "CPA", "lawyer" or "software engineer" -- and the harness is meant to be
+    reusable for a second subject whose occupation is not knowable here. A
+    malformed informed baseline is a weaker stand-in than the thing it
+    represents, which widens the naive/informed gap in the flattering
+    direction.
+
+    Checked against occupations that break BOTH article choices: "an" is wrong
+    for lawyer, "a" is wrong for architect and editor, and the a/an rule is
+    about pronunciation rather than spelling ("an hour", "a union"), so
+    computing the article would be a second defect rather than a fix.
+    """
+    for occupation in ("CPA", "lawyer", "architect", "software engineer",
+                       "editor", "hour-billing consultant", "underwriter"):
+        prompt = informed_baseline(_cfg("Ada Fielding", occupation)).system_prompt
+        assert f"occupation is {occupation}." in prompt, prompt
+        for article in (" a ", " an ", " A ", " An "):
+            assert article not in prompt, (occupation, prompt)
+
+
+def test_renaming_the_informed_baseline_tracked_its_reworded_template():
+    """Rename-rather-than-edit, observed: the template lost its article, so
+    the baseline is a different baseline and says so. A reworded prompt still
+    carrying the old name would silently invalidate every delta measured
+    against it."""
+    assert informed_baseline(_cfg()).name == "informed-v2"
 
 
 def test_baselines_pin_sampling_parameters():

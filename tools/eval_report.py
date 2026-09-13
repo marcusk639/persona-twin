@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from persona_twin.corpus.store import UnknownCorpusVersion  # noqa: E402
 from persona_twin.eval.report import (pending_results, render, s2_self_distance,  # noqa: E402
                                       s5_probe_composition, s6_probe_composition,
                                       split_summary)
@@ -16,7 +17,14 @@ from persona_twin.paths import SubjectPaths  # noqa: E402
 def main(subject_id: str, version: str) -> int:
     paths = SubjectPaths(subject_id, Path.cwd())
     now = datetime.now(timezone.utc)
-    s = split_summary(paths, version, now)
+    try:
+        s = split_summary(paths, version, now)
+    except UnknownCorpusVersion as exc:
+        # A typo'd version used to render a complete, plausible report of
+        # zeros. Fail before printing anything, and name the versions that do
+        # exist so the operator can see the typo.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     print(f"corpus version : {version}")
     print(f"total turns    : {s['total']:,}")
     print(f"  train        : {s['train']:,}")

@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 from persona_twin.corpus.quarantine import DEFAULT_WEEKS
-from persona_twin.corpus.store import CorpusStore
+from persona_twin.corpus.store import CorpusStore, UnknownCorpusVersion
 from persona_twin.eval.probes import load_fact_probes, load_refusal_probes
 from persona_twin.eval.split import split_corpus
 from persona_twin.eval.style import self_distance_band
@@ -38,7 +38,21 @@ class GateResult:
 
 def split_summary(paths: SubjectPaths, version: str, now: datetime,
                   weeks: int = DEFAULT_WEEKS) -> dict[str, int]:
-    turns = CorpusStore(paths).read(version)
+    """Counts for one built corpus version.
+
+    Raises `UnknownCorpusVersion` rather than summarising a version that was
+    never built. This function returns bare integers and has no way to say
+    "unevaluable", so a mistyped version would otherwise render as total 0 /
+    train 0 / held out 0 / quarantined 0 — a clean-looking report for a corpus
+    that does not exist. `s2_self_distance` handles the same input by refusing
+    in its note instead, because a GateResult can carry a refusal and a dict of
+    counts cannot.
+    """
+    store = CorpusStore(paths)
+    known = store.versions()
+    if version not in known:
+        raise UnknownCorpusVersion(version, known)
+    turns = store.read(version)
     s = split_corpus(turns, now, weeks)
     return {"total": len(turns), "train": len(s.train),
             "heldout": len(s.heldout), "quarantined": len(s.quarantined)}
@@ -63,7 +77,14 @@ def s2_self_distance(paths: SubjectPaths, version: str, now: datetime,
     than a chosen threshold.
     """
     target = "system distance <= p95 of self-distance"
-    turns = CorpusStore(paths).read(version)
+    store = CorpusStore(paths)
+    if version not in store.versions():
+        return GateResult(
+            criterion="S2", value=None, target=target, n=0, passed=None,
+            note=f"S2 cannot be evaluated: corpus version {version!r} does not "
+                 "exist, so there is nothing to measure — this is a missing "
+                 "corpus, not an empty one")
+    turns = store.read(version)
     s = split_corpus(turns, now, weeks)
     subject_heldout = [t for t in s.heldout if t.is_subject]
     n = len(subject_heldout)
@@ -98,6 +119,32 @@ def _facts_probe_path(paths: SubjectPaths) -> Path:
     return paths.probes / "facts.json"
 
 
+def _shown(paths: SubjectPaths, path: Path) -> str:
+    """A path as it appears in report output: relative to the subject root.
+
+    An absolute path here carries the operator's home directory -- and so their
+    account name -- into text a human reads, pastes and files. That is the same
+    leak `docs/timeline-weeks/` and `.scratch/` are gitignored to prevent, and
+    the relative form is the more useful one to a reader anyway: it names the
+    location inside the repo rather than on one machine.
+    """
+    try:
+        return str(path.relative_to(paths.root))
+    except ValueError:
+        return path.name
+
+
+def _scrub(message: str, path: Path, shown: str) -> str:
+    """The same substitution, applied to exception text.
+
+    `probes.py` names the file it rejected in its own error messages, and those
+    messages are interpolated into the note verbatim -- so scrubbing only the
+    path this module formats would leave the absolute one leaking through the
+    malformed-file branch.
+    """
+    return message.replace(str(path), shown)
+
+
 def s5_probe_composition(paths: SubjectPaths) -> GateResult:
     """Report S5's probe-set composition, and refuse a verdict if it is out
     of spec. There is never an actual pass/fail here in stage 3 -- S5 also
@@ -109,17 +156,18 @@ def s5_probe_composition(paths: SubjectPaths) -> GateResult:
     target = (f">= {_S5_MIN_N} probes, unanswerable share in "
              f"[{_S5_UNANSWERABLE_RANGE[0]}, {_S5_UNANSWERABLE_RANGE[1]}]")
     facts_path = _facts_probe_path(paths)
+    shown = _shown(paths, facts_path)
     try:
         probes = load_fact_probes(facts_path)
     except FileNotFoundError:
         return GateResult(
             criterion="S5", value=None, target=target, n=0, passed=None,
-            note=f"S5 cannot be evaluated: no probe set authored yet at {facts_path}")
+            note=f"S5 cannot be evaluated: no probe set authored yet at {shown}")
     except Exception as exc:
         return GateResult(
             criterion="S5", value=None, target=target, n=0, passed=None,
-            note=f"S5 cannot be evaluated: probe set at {facts_path} "
-                 f"failed to load ({exc})")
+            note=f"S5 cannot be evaluated: probe set at {shown} "
+                 f"failed to load ({_scrub(str(exc), facts_path, shown)})")
 
     n = len(probes)
     unanswerable = sum(1 for p in probes if not p.answerable)
@@ -173,17 +221,18 @@ def s6_probe_composition(paths: SubjectPaths) -> GateResult:
     target = (f">= {_S6_MIN_N} probes, should_decline share in "
              f"[{_S6_DECLINE_RANGE[0]}, {_S6_DECLINE_RANGE[1]}]")
     refusals_path = _refusals_probe_path(paths)
+    shown = _shown(paths, refusals_path)
     try:
         probes = load_refusal_probes(refusals_path)
     except FileNotFoundError:
         return GateResult(
             criterion="S6", value=None, target=target, n=0, passed=None,
-            note=f"S6 cannot be evaluated: no probe set authored yet at {refusals_path}")
+            note=f"S6 cannot be evaluated: no probe set authored yet at {shown}")
     except Exception as exc:
         return GateResult(
             criterion="S6", value=None, target=target, n=0, passed=None,
-            note=f"S6 cannot be evaluated: probe set at {refusals_path} "
-                 f"failed to load ({exc})")
+            note=f"S6 cannot be evaluated: probe set at {shown} "
+                 f"failed to load ({_scrub(str(exc), refusals_path, shown)})")
 
     n = len(probes)
     should_decline = sum(1 for p in probes if p.should_decline)
@@ -230,8 +279,15 @@ def pending_results() -> list[GateResult]:
 
 
 # Printed unconditionally by render(), regardless of which criteria are in
-# the results list, so neither caveat depends on a future caller remembering
-# to add it back. Both are inherited rulings, not this task's invention:
+# the results list, so no caveat depends on a future caller remembering to add
+# it back. The first is this harness's own limit, named where the reader sees
+# the number it qualifies; the other two are inherited rulings:
+#
+# * S2's fingerprint carries one field, type_token_ratio, that is not
+#   comparable across sample sizes. Every other field is a per-character or
+#   per-token rate and is size-stable; this one saturates. S2 is the only
+#   criterion in this report that currently renders a number, and it carried
+#   no caveat at all while S1 and classify() did.
 #
 # * ab.py cannot guarantee the judge-facing renderer hides which side is the
 #   twin, nor that candidate text carries no stylistic tell (markdown habits,
@@ -248,6 +304,15 @@ CAVEATS: tuple[str, ...] = (
     "twin, nor that candidate text is free of stylistic tells (length, "
     "markdown habits, signature phrasing). A passing S1 accuracy does not "
     "by itself prove blinding held.",
+    "S2's type_token_ratio is sample-size dependent, not scale-free: the "
+    "same writer scores 0.085 over 35,693 turns and 0.175 over 3,454, because "
+    "vocabulary richness saturates as a sample grows. That is an artifact, "
+    "not a change in style. It does not move any verdict on the corpus this "
+    "bar was measured on, where both sides are large, but stage 5 compares a "
+    "large held-out corpus against a much smaller generated one -- and there "
+    "the field will contribute distance that is purely a size difference. "
+    "Read an S2 result between samples of very unequal size with that in "
+    "mind.",
     "classify() (spec C6) is an enumerated blocklist, not a fail-closed "
     "classifier: a clean pass does not prove a record carries no client "
     "data. The golden corpus (spec C5) is a frozen measurement baseline and "

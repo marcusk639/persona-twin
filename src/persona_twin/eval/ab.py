@@ -114,9 +114,22 @@ def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, flo
 
 @dataclass(frozen=True)
 class ABResult:
+    """`accuracy` is None at n=0, never 0.0.
+
+    S1 passes at accuracy <= 0.60, so a bare `0.0` on zero trials is a PASS
+    computed from nothing — the same flattering-null shape `wilson_interval`
+    already refuses by returning (0.0, 1.0) rather than a confident
+    (0.0, 0.0), and the same shape `GateResult.value: float | None` exists to
+    express. A zero accuracy beside a maximally-uncertain interval is
+    self-contradictory output; None is the honest answer, and it forces the
+    caller to decide rather than letting the comparison silently succeed.
+
+    Not reachable while S1 renders as pending, which is exactly why it is
+    fixed now: stage 5 is where an empty trial list becomes a scored result.
+    """
     n: int
     correct: int
-    accuracy: float
+    accuracy: float | None
     ci_low: float
     ci_high: float
 
@@ -143,6 +156,6 @@ def score_trials(trials: list[ABTrial], guesses: dict[str, str]) -> ABResult:
         if picked == ("a" if t.real_is_a else "b"):
             correct += 1
     n = len(trials)
-    acc = correct / n if n else 0.0
+    acc = correct / n if n else None   # see ABResult: never a bare 0.0
     lo, hi = wilson_interval(correct, n)
     return ABResult(n=n, correct=correct, accuracy=acc, ci_low=lo, ci_high=hi)

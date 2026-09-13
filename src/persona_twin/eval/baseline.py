@@ -19,6 +19,12 @@ These are pinned. Changing a model version or a sampling parameter makes a
 different baseline, and every delta measured against the old one becomes
 meaningless — so rename rather than edit, and let the fingerprint prove it.
 
+informed-v1 was renamed to informed-v2 when its template lost an indefinite
+article (see _INFORMED_TEMPLATE). That is the rename-rather-than-edit rule
+being followed, not bypassed: the wording changed, so the baseline changed, so
+the name and fingerprint changed with it. Safe now because nothing has been
+scored against informed-v1; it would not be safe once stage 5 has.
+
 Subject identity is NOT stored here. Name and occupation are read from the
 subject's git-ignored `SubjectConfig`, so this module stays free of any one
 person's details -- which is what `tools/name_leak_lint.py` enforces and what
@@ -54,8 +60,17 @@ class MissingOccupation(Exception):
         )
 
 
-_INFORMED_TEMPLATE = ("You are replying as {subject_name}, an {occupation}. "
-                      "Reply to this message.")
+# No indefinite article. "an {occupation}" is correct for "architect" and
+# wrong for "CPA", "lawyer" or "software engineer" -- and this harness is meant
+# to be reusable for a second subject (spec §13), so the occupation is not
+# knowable in advance. A malformed informed baseline is a WEAKER stand-in than
+# the thing it represents, which widens the naive/informed gap and flatters any
+# twin scored against it: the exact direction this module's MissingOccupation
+# guard exists to prevent. Restructured so no article is needed, rather than
+# computing a/an from a first letter -- "an hour", "a union" show that rule is
+# about pronunciation, not spelling, and a wrong article here is silent.
+_INFORMED_TEMPLATE = ("You are replying as {subject_name}. Your occupation is "
+                      "{occupation}. Reply to this message.")
 
 
 class BaselineConfig(BaseModel):
@@ -87,7 +102,7 @@ def informed_baseline(config: SubjectConfig) -> BaselineConfig:
     if not (config.occupation or "").strip():
         raise MissingOccupation(config.subject_id)
     return BaselineConfig(
-        name="informed-v1",
+        name="informed-v2",
         model="claude-sonnet-4-5-20250929",
         temperature=1.0,
         top_p=1.0,
