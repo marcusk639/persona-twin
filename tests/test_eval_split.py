@@ -13,6 +13,13 @@ def _t(thread: str, days_ago: int = 400, sid: str = "1") -> Turn:
 def test_bucket_is_deterministic_across_calls():
     assert thread_bucket("chat-42") == thread_bucket("chat-42")
 
+def test_bucket_matches_known_sha256_digest():
+    """Pins actual digest values so a switch to builtin hash() (which Python
+    salts per process) or a change of input encoding would be caught, unlike
+    a same-process comparison which passes under either scheme."""
+    assert thread_bucket("chat-7") == 44
+    assert thread_bucket("thread-0") == 19
+
 def test_bucket_is_in_range():
     for i in range(200):
         assert 0 <= thread_bucket(f"chat-{i}") < 100
@@ -23,11 +30,16 @@ def test_all_turns_of_a_thread_land_on_the_same_side():
     assert len(sides) == 1, "a thread must not straddle the split"
 
 def test_split_is_stable_when_unrelated_turns_are_added():
-    """The property that makes later data exports safe."""
+    """The property that makes later data exports safe.
+
+    Round-trips through split_corpus (not is_heldout directly) so a
+    regression introduced inside split_corpus itself -- e.g. a future
+    stratification step that considers the whole corpus -- would be caught.
+    """
     original = [_t(f"chat-{i}", sid=str(i)) for i in range(50)]
-    before = {t.source_id: is_heldout(t) for t in original}
+    before = {t.source_id for t in split_corpus(original, NOW).heldout}
     grown = original + [_t(f"newchat-{i}", sid=f"n{i}") for i in range(500)]
-    after = {t.source_id: is_heldout(t) for t in grown if t.source_id in before}
+    after = {t.source_id for t in split_corpus(grown, NOW).heldout if t.source_id in {o.source_id for o in original}}
     assert before == after, "adding data moved existing turns across the split"
 
 def test_heldout_fraction_is_approximately_right():
@@ -41,6 +53,18 @@ def test_quarantined_turns_are_in_neither_train_nor_heldout():
     s = split_corpus([recent, old], NOW, weeks=12)
     assert recent in s.quarantined
     assert recent not in s.train and recent not in s.heldout
+
+def test_quarantine_takes_precedence_over_heldout_side():
+    """held-5 hashes into the held-out band (thread_bucket == 1). A recent
+    turn on that thread must still be quarantined, not heldout -- this fails
+    if split_corpus checks is_heldout before is_quarantined."""
+    assert thread_bucket("held-5") < 15  # sanity: thread really is heldout-band
+    recent = _t("held-5", days_ago=3, sid="r")
+    old = _t("held-5", days_ago=400, sid="o")
+    s = split_corpus([recent, old], NOW, weeks=12)
+    assert recent in s.quarantined
+    assert recent not in s.heldout
+    assert old in s.heldout
 
 def test_split_partitions_every_turn_exactly_once():
     turns = [_t(f"chat-{i}", days_ago=d, sid=f"{i}-{d}")
