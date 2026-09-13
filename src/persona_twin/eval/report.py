@@ -93,7 +93,7 @@ _S5_UNANSWERABLE_RANGE = (0.4, 0.6)
 
 
 def _facts_probe_path(paths: SubjectPaths) -> Path:
-    return Path(paths.root) / "data" / "subjects" / paths.subject_id / "probes" / "facts.json"
+    return paths.probes / "facts.json"
 
 
 def s5_probe_composition(paths: SubjectPaths) -> GateResult:
@@ -157,7 +157,7 @@ _S6_DECLINE_RANGE = (0.4, 0.6)
 
 
 def _refusals_probe_path(paths: SubjectPaths) -> Path:
-    return Path(paths.root) / "data" / "subjects" / paths.subject_id / "probes" / "refusals.json"
+    return paths.probes / "refusals.json"
 
 
 def s6_probe_composition(paths: SubjectPaths) -> GateResult:

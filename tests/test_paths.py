@@ -4,8 +4,12 @@ from persona_twin.paths import SubjectPaths
 
 def test_every_tier_is_subject_scoped(tmp_path):
     p = SubjectPaths("alice", root=tmp_path)
-    for tier in (p.vault, p.clean, p.exportable, p.golden, p.cursors, p.ledger):
+    for tier in (p.vault, p.clean, p.exportable, p.golden, p.probes, p.cursors, p.ledger):
         assert "alice" in str(tier), f"{tier} is not subject-scoped"
+
+def test_probes_resolves_relative_to_base(tmp_path):
+    p = SubjectPaths("alice", root=tmp_path)
+    assert p.probes == p._base / "probes"
 
 def test_two_subjects_never_share_a_directory(tmp_path):
     a, b = SubjectPaths("alice", root=tmp_path), SubjectPaths("bob", root=tmp_path)

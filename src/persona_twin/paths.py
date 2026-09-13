@@ -27,6 +27,8 @@ class SubjectPaths:
     @property
     def golden(self) -> Path: return self._base / "golden"
     @property
+    def probes(self) -> Path: return self._base / "probes"
+    @property
     def cursors(self) -> Path: return self._base / "vault" / "cursors.json"
     @property
     def ledger(self) -> Path: return self._base / "ledger.jsonl"
