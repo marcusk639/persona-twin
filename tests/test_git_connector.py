@@ -1,5 +1,6 @@
 import json
 import subprocess
+import pytest
 from persona_twin.config import SubjectConfig
 from persona_twin.paths import SubjectPaths
 from persona_twin.connectors.base import SubjectContext
@@ -66,10 +67,29 @@ def test_pruned_cursor_falls_back_to_full_log(tmp_path):
     msgs = [e.payload["text"] for e, _ in c.fetch(_ctx(tmp_path), cursor)]
     assert "one" in msgs and "two" in msgs
 
-def test_non_git_directory_is_skipped_without_raising(tmp_path):
+def test_broken_repo_raises_instead_of_reporting_false_zero(tmp_path):
+    # A directory that isn't a git repo at all (also covers ".git" pruned,
+    # path unmounted, typo'd repo root -- all surface as the same
+    # CalledProcessError). This must abort the run, not be silently
+    # skipped: a silent skip is indistinguishable, once it reaches the
+    # ledger, from "this repo legitimately had zero new commits" -- and a
+    # false success in the ledger is unrecoverable after the fact.
     not_a_repo = tmp_path / "not_a_repo"
     not_a_repo.mkdir()
     good_repo = _repo(tmp_path, ["only commit"])
     c = GitConnector([not_a_repo, good_repo], ["alice@example.com"])
-    msgs = [e.payload["text"] for e, _ in c.fetch(_ctx(tmp_path), None)]
-    assert msgs == ["only commit"]
+    with pytest.raises(RuntimeError) as exc_info:
+        list(c.fetch(_ctx(tmp_path), None))
+    assert str(not_a_repo) in str(exc_info.value)
+
+def test_legitimately_empty_repo_still_succeeds_with_zero_envelopes(tmp_path):
+    # The case the broken-repo raise above must NOT be conflated with: a
+    # real, healthy repo that simply has no new commits since the cursor
+    # (git log succeeds with empty stdout, not a CalledProcessError).
+    repo = _repo(tmp_path, ["one", "two"])
+    c = GitConnector([repo], ["alice@example.com"])
+    ctx = _ctx(tmp_path)
+    cursor = None
+    for _, cur in c.fetch(ctx, None):
+        cursor = cur
+    assert list(c.fetch(ctx, cursor)) == []

@@ -15,24 +15,27 @@ class GitConnector:
         self.repos = [Path(r) for r in repo_roots]
         self.emails = [e.lower() for e in author_emails]
 
-    def _run_log(self, repo: Path, since_sha: str | None) -> str | None:
-        """Run `git log`, returning stdout or None on failure (warns to stderr).
+    def _run_log(self, repo: Path, since_sha: str | None) -> tuple[str | None, str | None]:
+        """Run `git log`, returning (stdout, None) on success or (None, error)
+        on failure (also warns to stderr).
 
         A failure here does not mean "no new commits" — it can also mean
         the cursor SHA no longer exists (pruned after a rebase) or the
-        path isn't a git repo at all. The caller decides what None means;
-        this method's only job is to never raise and to never stay silent.
+        path isn't a git repo at all. The caller decides what a failure
+        means (retry, raise, or ignore); this method's only job is to
+        never raise and to never stay silent about what went wrong.
         """
         rng = [f"{since_sha}..HEAD"] if since_sha else []
         cmd = ["git", "log", f"--format=%H{_SEP}%aI{_SEP}%ae{_SEP}%B%x00", *rng]
         try:
-            return subprocess.run(cmd, cwd=repo, check=True,
-                                  capture_output=True, text=True).stdout
+            out = subprocess.run(cmd, cwd=repo, check=True,
+                                 capture_output=True, text=True).stdout
+            return out, None
         except subprocess.CalledProcessError as exc:
             err = exc.stderr.strip() if exc.stderr else str(exc)
-            print(f"git_repos: git log failed for {repo!s} "
-                  f"(cursor={since_sha!r}): {err}", file=sys.stderr)
-            return None
+            msg = f"git log failed for {repo!s} (cursor={since_sha!r}): {err}"
+            print(f"git_repos: {msg}", file=sys.stderr)
+            return None, msg
 
     def _parse(self, out: str) -> list[tuple[str, str, str]]:
         rows = []
@@ -45,7 +48,7 @@ class GitConnector:
         return list(reversed(rows))
 
     def _log(self, repo: Path, since_sha: str | None) -> list[tuple[str, str, str]]:
-        out = self._run_log(repo, since_sha)
+        out, err = self._run_log(repo, since_sha)
         if out is None and since_sha is not None:
             # The ranged call failed with a cursor set — most likely the
             # stored cursor SHA no longer exists in this repo (e.g. a hard
@@ -56,12 +59,25 @@ class GitConnector:
             # source_id): re-reading full history costs time but
             # re-ingests nothing already in the vault, and recovers any
             # commits that would otherwise be stranded.
-            out = self._run_log(repo, None)
+            out, err = self._run_log(repo, None)
         if out is None:
-            # Retry (or the original call, if there was no cursor to
-            # retry without) also failed — a genuinely broken or missing
-            # repo. Not recoverable here; the warning above already fired.
-            return []
+            # Both attempts failed — a genuinely broken or missing repo
+            # (not a git repo, `.git` pruned, path unmounted, typo'd repo
+            # root). This must not be reported as "zero new commits": that
+            # is indistinguishable from a repo that legitimately had
+            # nothing new, and run_connector would write a false success
+            # to the ledger, which is this project's provenance audit
+            # trail. Raising instead is cheap: run_connector leaves the
+            # per-repo cursor at its previous value on any exception
+            # (connectors/base.py), and re-running after the repo is
+            # fixed re-ingests nothing already written, because
+            # VaultWriter dedupes on (subject_id, source, source_id) and
+            # source_id here is the bare commit SHA (see fetch() below) —
+            # so the retry costs only time.
+            raise RuntimeError(
+                f"git_repos: {repo!s} is unreadable, aborting this ingest "
+                f"run rather than reporting a false zero-new-commits "
+                f"success: {err}")
         return self._parse(out)
 
     def fetch(self, ctx: SubjectContext,
