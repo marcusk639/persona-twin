@@ -39,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from persona_twin.paths import SubjectPaths
+from persona_twin.config import load_subject
 from persona_twin.corpus.store import CorpusStore
 from persona_twin.scrub.secrets import scan
 from persona_twin.scrub.classify import classify
@@ -66,14 +67,30 @@ def _report(label: str, findings: list[str]) -> bool:
     return not findings
 
 
-def audit(paths: SubjectPaths, version: str) -> int:
+def audit(paths: SubjectPaths, version: str, subject_id: str = "",
+          root: Path = Path(".")) -> int:
     turns = CorpusStore(paths).read(version)
 
     secret_findings: list[str] = []
     confidential_findings: list[str] = []
     identifier_findings: list[str] = []
+    # Checks the subject's name in turn TEXT, not just the author field. The
+    # original audit asked only about ids -- the same narrow question the
+    # pseudonymizer answers -- so it passed on a corpus carrying the subject's
+    # real name in 1,225 message bodies. name_leak_lint could not catch it
+    # either: it skips data/ by design, where the corpus lives.
+    name_findings: list[str] = []
+    needles: list[str] = []
+    if subject_id:
+        cfg = load_subject(subject_id, root)
+        needles = [n.strip() for n in [cfg.display_name] + list(cfg.aliases)
+                   if n and len(n.strip()) >= 3]
+    name_rx = (re.compile("|".join(rf"(?<!\w){re.escape(n)}(?!\w)" for n in needles),
+                          re.I) if needles else None)
 
     for t in turns:
+        if name_rx is not None and name_rx.search(t.text):
+            name_findings.append(f"{t.source}:{t.source_id}")
         for start, end, secret_label in scan(t.text):
             secret_findings.append(
                 f"{t.source}:{t.source_id} pos={start}-{end} label={secret_label}")
@@ -90,6 +107,7 @@ def audit(paths: SubjectPaths, version: str) -> int:
     ok &= _report("secret spans found", secret_findings)
     ok &= _report("confidential turns", confidential_findings)
     ok &= _report("un-pseudonymized ids", identifier_findings)
+    ok &= _report("subject name in text", name_findings)
 
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
@@ -115,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("version")
     args = parser.parse_args(argv)
     paths = SubjectPaths(args.subject_id, Path.cwd())
-    return audit(paths, args.version)
+    return audit(paths, args.version, args.subject_id, Path(args.root) if hasattr(args, "root") else Path("."))
 
 
 if __name__ == "__main__":

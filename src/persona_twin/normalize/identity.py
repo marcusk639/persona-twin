@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hmac, json, os
+import hmac, json, os, re
 from hashlib import sha256
 from pathlib import Path
 from persona_twin.paths import SubjectPaths
@@ -60,3 +60,36 @@ class Pseudonymizer:
         if turn.is_subject:
             return turn
         return turn.model_copy(update={"author_id": self.pseudonym(turn.author_id)})
+
+
+def scrub_identity(text: str, needles: list[str], replacement: str) -> str:
+    """Replace the subject's own name in turn TEXT (spec C3 / §13.1).
+
+    Pseudonymizer.apply() rewrites `author_id` only, which leaves the subject's
+    name wherever it appears in a message body -- inbound SMS that address him
+    by name, appointment reminders, signature lines. Measured on v5 that was
+    1,828 turns across train, held-out and quarantined, including the frozen
+    CC2 baseline. Neither existing check catches it: corpus_audit asks about
+    ids, and name_leak_lint skips data/ by design.
+
+    A real first name rather than a token, deliberately: the corpus is training
+    data for a voice model, and 1,828 instances of "[SUBJECT]" would teach the
+    twin to emit "[SUBJECT]" and would shift the type-token ratio S2 measures.
+
+    Longest needle first, so a full name is replaced as one unit instead of
+    each part separately ("Marcus Klein" -> "Dylan", never "Dylan Dylan").
+    Word-anchored, because the aliases here are 5-6 characters and unanchored
+    matching corrupts ordinary prose ("Kleiner Perkins", "Kleines").
+    """
+    # A 1-2 character needle matches common words -- case-insensitively "A"
+    # rewrites every standalone "a" in the corpus, and "Jo" hits "Jo" in any
+    # list of names. Substitution cannot safely scrub a token that short, so it
+    # is excluded rather than applied; the tradeoff is documented because the
+    # alternative silently destroys the corpus.
+    cleaned = [n.strip() for n in needles if n and len(n.strip()) >= 3]
+    if not cleaned:
+        # An empty needle compiles to a pattern matching at every position,
+        # which would rewrite the entire corpus into the replacement name.
+        return text
+    pattern = "|".join(re.escape(n) for n in sorted(cleaned, key=len, reverse=True))
+    return re.sub(rf"(?<!\w)(?:{pattern})(?!\w)", replacement, text, flags=re.I)

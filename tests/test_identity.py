@@ -83,3 +83,68 @@ def test_key_creation_ignores_stale_exists_check(tmp_path, monkeypatch):
 
     assert key_path.read_bytes() == known_key
     assert p.pseudonym("dave@x.com") == expected_token
+
+
+# --- text-level identity scrub (spec C3 / §13.1) ---
+
+NEEDLES = ["Marcus Klein", "Marcus", "Klein"]
+
+
+def test_replaces_the_subject_name_in_turn_text():
+    from persona_twin.normalize.identity import scrub_identity
+    assert scrub_identity("Hey Marcus, you around?", NEEDLES, "Dylan") == \
+        "Hey Dylan, you around?"
+
+
+def test_matches_case_insensitively_because_inbound_sms_shouts():
+    """Appointment reminders arrive as 'MARCUS KLEIN'."""
+    from persona_twin.normalize.identity import scrub_identity
+    assert scrub_identity("MARCUS KLEIN is scheduled", NEEDLES, "Dylan") == \
+        "Dylan is scheduled"
+
+
+def test_full_name_is_replaced_as_one_unit_not_twice():
+    """Shortest-first would turn 'Marcus Klein' into 'Dylan Dylan'."""
+    from persona_twin.normalize.identity import scrub_identity
+    assert scrub_identity("from Marcus Klein today", NEEDLES, "Dylan") == \
+        "from Dylan today"
+
+
+def test_does_not_match_inside_a_longer_word():
+    """Aliases here are 5-6 chars; unanchored matching corrupts ordinary prose."""
+    from persona_twin.normalize.identity import scrub_identity
+    for safe in ("Kleiner Perkins", "marcuscolumn", "Kleines"):
+        assert scrub_identity(safe, NEEDLES, "Dylan") == safe
+
+
+def test_text_without_the_name_is_returned_unchanged():
+    from persona_twin.normalize.identity import scrub_identity
+    s = "the billing flow is finicky on complex views"
+    assert scrub_identity(s, NEEDLES, "Dylan") is s or scrub_identity(s, NEEDLES, "Dylan") == s
+
+
+def test_empty_needles_are_ignored_rather_than_matching_everything():
+    """An empty alias compiles to a pattern matching the empty string at every
+    non-word boundary. The text MUST contain punctuation: without the guard,
+    "hi -- there" becomes "hi Dylan-Dylan-Dylan there", but a string of plain
+    words has no such position and the test would pass either way."""
+    from persona_twin.normalize.identity import scrub_identity
+    for s in ("hi -- there", "a, b", "(note)"):
+        assert scrub_identity(s, ["", "  "], "Dylan") == s
+
+
+def test_needles_shorter_than_three_characters_are_ignored():
+    """'A' or 'Jo' match common words; case-insensitively, a one-character
+    needle rewrites every standalone 'a' in the corpus. Substitution cannot
+    safely scrub a name that short -- excluding it is the lesser harm, and the
+    existing test fixture (display_name='A') proved the hazard is real."""
+    from persona_twin.normalize.identity import scrub_identity
+    s = "a quick note about the build"
+    assert scrub_identity(s, ["A"], "Dylan") == s
+    assert scrub_identity(s, ["Jo"], "Dylan") == s
+
+
+def test_a_long_enough_needle_still_applies_alongside_short_ones():
+    from persona_twin.normalize.identity import scrub_identity
+    assert scrub_identity("A note from Marcus", ["A", "Marcus"], "Dylan") == \
+        "A note from Dylan"

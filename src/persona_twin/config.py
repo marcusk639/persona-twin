@@ -13,6 +13,11 @@ class SubjectConfig(BaseModel):
     # require it must fail loudly rather than substitute a default -- see
     # eval.baseline.informed_baseline.
     occupation: str | None = None
+    # Replacement for the subject's own name in turn TEXT. Optional because a
+    # corpus whose bodies never contain the name needs no scrub; build_corpus
+    # raises if the name IS present and this is unset, rather than shipping an
+    # unscrubbed corpus -- see corpus.build.
+    pseudonym_name: str | None = None
 
 def load_subject(subject_id: str, root: Path) -> SubjectConfig:
     path = Path(root) / "config" / "subjects" / f"{subject_id}.yaml"
