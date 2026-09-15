@@ -155,3 +155,70 @@ def supersede_golden(paths: SubjectPaths, version: str, ledger: LearningLedger,
                    "turns_added": snap.turn_count - current.turn_count,
                    "archived_meta": str(archive), "reason": reason})
     return snap
+
+
+def rebaseline_golden(paths: SubjectPaths, version: str, ledger: LearningLedger,
+                      *, reason: str) -> GoldenSnapshot:
+    """Replace the CC2 baseline outright, accepting that turns are lost.
+
+    `supersede_golden` extends the baseline and refuses any drop, because the
+    superset rule protects comparisons already measured against it: if the
+    reference moves, drift reflects the baseline shifting rather than the
+    subject changing. This function is the deliberate exception, and it exists
+    for one situation that rule cannot express -- a corrected classifier now
+    excludes turns the old baseline contains. Those turns cannot be re-admitted
+    to satisfy the superset check without freezing confidential material into
+    an immutable reference, which is the exact harm CC2 exists to prevent. So
+    the only way to fold a new source into the baseline is to replace it.
+
+    The cost is real and asymmetric: every measurement previously taken against
+    the old baseline becomes incomparable, and no later build can restore it.
+    Use this only while that set of measurements is empty or expendable.
+
+    What is NOT waived:
+
+      * `assisted=True` is still refused. The superset rule guards measurement
+        continuity; the assisted rule guards contamination. Only the first is
+        in tension with a classifier fix, and conflating them would let the
+        system's own output into the reference for the subject's unassisted
+        voice -- unrecoverable once frozen.
+      * The outgoing snapshot's checksum is verified before it is replaced, so
+        a tampered baseline is caught rather than quietly discarded.
+      * A non-empty `reason` is required, and the ledger entry records the
+        dropped and added counts. A baseline replacement that leaves no trace
+        of what it cost is precisely what must not be easy.
+    """
+    if not reason.strip():
+        raise ValueError(
+            "rebaseline_golden requires a reason: replacing the CC2 baseline "
+            "discards measurement continuity and must be attributable")
+    if not _meta_path(paths).exists():
+        raise ValueError(
+            "no golden corpus is frozen yet; use freeze_golden for the first cut")
+    current = load_golden(paths)          # verifies the old checksum before we move it
+    store = CorpusStore(paths)
+    turns = store.read(version)
+
+    assisted = sum(1 for t in turns if t.assisted)
+    if assisted:
+        raise GoldenPostDeployment(assisted)
+
+    old = {(t.source, t.source_id) for t in store.read(current.version)}
+    new = {(t.source, t.source_id) for t in turns}
+    dropped = len(old - new)
+    added = len(new - old)
+
+    meta = _meta_path(paths)
+    archive = Path(paths.golden) / f"golden-superseded-{current.version}.json"
+    archive.write_text(meta.read_text(encoding="utf-8"), encoding="utf-8")
+    archive.chmod(0o444)
+    meta.chmod(0o644)
+    meta.unlink()
+    snap = freeze_golden(paths, version)
+    ledger.append("golden_rebaseline", paths.subject_id,
+                  {"from_version": current.version, "to_version": version,
+                   "from_sha256": current.sha256, "to_sha256": snap.sha256,
+                   "from_turns": current.turn_count, "to_turns": snap.turn_count,
+                   "dropped": dropped, "added": added,
+                   "archived_meta": str(archive), "reason": reason})
+    return snap

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 import pytest
@@ -6,7 +7,7 @@ from persona_twin.paths import SubjectPaths
 from persona_twin.schema import Turn
 from persona_twin.corpus.store import CorpusStore
 from persona_twin.corpus.freeze import (
-    freeze_golden, load_golden, supersede_golden,
+    freeze_golden, load_golden, supersede_golden, rebaseline_golden,
     GoldenCorpusTampered, GoldenNotASuperset, GoldenPostDeployment)
 
 def _t(i):
@@ -153,3 +154,72 @@ def test_supersede_without_an_existing_freeze_is_an_error(tmp_path):
     CorpusStore(paths).write("v1", [_turn("a")])
     with pytest.raises(ValueError):
         supersede_golden(paths, "v1", LearningLedger(paths.ledger), reason="r")
+
+
+# --- CC2 re-baseline (deliberate replacement, not a superset re-cut) ---------
+
+def test_rebaseline_replaces_the_baseline_even_when_turns_are_dropped(tmp_path):
+    """The whole point: supersede refuses this, rebaseline is the deliberate door."""
+    paths = _frozen(tmp_path, [_turn("a"), _turn("b")])
+    CorpusStore(paths).write("v2", [_turn("a"), _turn("c")])   # "b" dropped
+    snap = rebaseline_golden(paths, "v2", LearningLedger(paths.ledger),
+                             reason="classifier now excludes b as confidential")
+    assert snap.version == "v2" and snap.turn_count == 2
+    assert load_golden(paths).version == "v2"
+
+
+def test_rebaseline_still_refuses_an_assisted_turn(tmp_path):
+    """Waiving the superset rule must NOT waive the contamination rule."""
+    paths = _frozen(tmp_path, [_turn("a")])
+    CorpusStore(paths).write("v2", [_turn("a"), _turn("b", assisted=True)])
+    with pytest.raises(GoldenPostDeployment):
+        rebaseline_golden(paths, "v2", LearningLedger(paths.ledger), reason="r")
+    assert load_golden(paths).version == "v1"
+
+
+def test_rebaseline_keeps_the_previous_snapshot_loadable(tmp_path):
+    paths = _frozen(tmp_path, [_turn("a"), _turn("b")])
+    old = Path(paths.golden) / "golden-v1.jsonl"
+    old_bytes = old.read_bytes()
+    CorpusStore(paths).write("v2", [_turn("a")])
+    rebaseline_golden(paths, "v2", LearningLedger(paths.ledger), reason="r")
+    assert old.exists() and old.read_bytes() == old_bytes
+    assert (Path(paths.golden) / "golden-superseded-v1.json").exists()
+
+
+def test_rebaseline_requires_a_reason(tmp_path):
+    """An un-attributed baseline replacement is exactly what must not be easy."""
+    paths = _frozen(tmp_path, [_turn("a")])
+    CorpusStore(paths).write("v2", [_turn("a")])
+    with pytest.raises(ValueError):
+        rebaseline_golden(paths, "v2", LearningLedger(paths.ledger), reason="  ")
+    assert load_golden(paths).version == "v1"
+
+
+def test_rebaseline_records_what_was_lost_in_the_ledger(tmp_path):
+    paths = _frozen(tmp_path, [_turn("a"), _turn("b"), _turn("c")])
+    CorpusStore(paths).write("v2", [_turn("a"), _turn("d"), _turn("e")])
+    rebaseline_golden(paths, "v2", LearningLedger(paths.ledger), reason="why")
+    entry = [json.loads(l) for l in Path(paths.ledger).read_text().splitlines()
+             if json.loads(l)["kind"] == "golden_rebaseline"][-1]
+    p = entry["payload"]
+    assert p["from_version"] == "v1" and p["to_version"] == "v2"
+    assert p["dropped"] == 2 and p["added"] == 2 and p["reason"] == "why"
+
+
+def test_rebaseline_verifies_the_old_checksum_before_replacing_it(tmp_path):
+    """A tampered baseline must not be silently swapped out and lost."""
+    paths = _frozen(tmp_path, [_turn("a")])
+    snap = Path(paths.golden) / "golden-v1.jsonl"
+    snap.chmod(0o644)
+    snap.write_text(snap.read_text() + "\n{}")
+    CorpusStore(paths).write("v2", [_turn("a")])
+    with pytest.raises(GoldenCorpusTampered):
+        rebaseline_golden(paths, "v2", LearningLedger(paths.ledger), reason="r")
+
+
+def test_rebaseline_refuses_before_any_baseline_exists(tmp_path):
+    paths = SubjectPaths("alice", tmp_path); paths.ensure()
+    CorpusStore(paths).write("v1", [_turn("a")])
+    with pytest.raises(ValueError):
+        rebaseline_golden(paths, "v1", LearningLedger(paths.ledger), reason="r")
