@@ -105,3 +105,25 @@ def test_blank_prompts_do_not_become_probes_if_left_unfilled():
     probes, skipped = pi.parse_with_skips(body)
     assert probes == []
     assert skipped >= 1
+
+
+def test_the_inline_guide_is_entirely_comments():
+    """Guide prose must never parse as a probe row, or the file teaches the
+    reader one thing and feeds the intake another."""
+    body, _ = pb.render(["a seed line"], [], {})
+    header = body.split("# ITEM 1")[0]
+    for line in header.splitlines():
+        assert not line.strip() or line.lstrip().startswith("#"), \
+            f"guide line would parse as data: {line!r}"
+
+
+def test_the_guide_survives_intake_without_producing_probes():
+    body, _ = pb.render(["a seed line"], [], {})
+    probes, _ = pi.parse_with_skips(body.split("# ITEM 1")[0])
+    assert probes == []
+
+
+def test_the_guide_shows_a_worked_example_of_a_good_answer():
+    """A rule without an example gets interpreted, not followed."""
+    body, _ = pb.render(["a seed line"], [], {})
+    assert "React Native" in body and "scores" in body
