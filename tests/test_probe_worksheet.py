@@ -113,3 +113,45 @@ def test_text_duplicated_into_a_heldout_thread_is_excluded(tmp_path):
     body = (Path(paths.probes) / "worksheet.md").read_text(encoding="utf-8")
     assert "BROADCASTMARKER" not in body
     assert "boring option" in body
+
+
+SENSITIVE_CASES = [
+    ("substance dosing", "I always tell people to taper down to 2.5mg oxy before "
+                         "jumping off, because otherwise withdrawal is brutal for weeks."),
+    ("mental health crisis", "I always feel like I have to find my own way out or I'll "
+                             "make an early exit from this life, and that scares me badly."),
+    ("intimate relationship", "I love you more than anything and I always feel invalidated "
+                              "when I try to defend myself in our arguments about this."),
+    ("third-party benefits claim", "I always tell him to write in 10B that his EPRs from "
+                                   "2013 show declines anticipated for the disability claim."),
+    ("medical", "I always put off calling the doctor about the prescription until the "
+                "diagnosis actually starts interfering with my work somehow."),
+]
+
+
+def test_sensitive_lines_are_excluded_from_the_worksheet():
+    """Probes built on these would put third parties' private data into an
+    eval artifact, and probe files are not classifier-gated."""
+    for label, text in SENSITIVE_CASES:
+        picked = pw.select([_turn("t", text)], pw.CATEGORIES["preferences"])
+        assert picked == [], f"{label} line was not excluded: {text[:50]}"
+
+
+def test_ordinary_work_lines_still_survive_the_sensitivity_filter():
+    """Over-exclusion costs probe candidates; the filter must not eat the corpus."""
+    picked = pw.select([_turn("t", SENTENCE)], pw.CATEGORIES["preferences"])
+    assert len(picked) == 1
+
+
+def test_excluded_count_is_reported_not_silently_dropped(tmp_path):
+    """A filter that hides how much it removed reads as full coverage."""
+    paths = SubjectPaths("alice", tmp_path)
+    paths.ensure()
+    tid = _thread_on_side(False)
+    turns = [_turn(tid, SENTENCE, source_id="keep")]
+    turns += [_turn(tid, t, source_id=f"drop{i}")
+              for i, (_, t) in enumerate(SENSITIVE_CASES)]
+    CorpusStore(paths).write("v1", turns)
+    pw.main(["alice", "v1", "--root", str(tmp_path)])
+    body = (Path(paths.probes) / "worksheet.md").read_text(encoding="utf-8")
+    assert "withheld as sensitive" in body

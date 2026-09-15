@@ -42,6 +42,26 @@ CATEGORIES: dict[str, str] = {
 
 # Short turns rarely carry a checkable claim ("yeah", "ok sounds good"). The
 # corpus median is ~42 chars, so this keeps the substantive tail.
+# Material that must not become probe content. Probe files are NOT gated by the
+# confidentiality classifier and are handed to a scoring harness, so a probe
+# built on any of this would put a third party's medical, legal, or intimate
+# situation into an evaluation artifact. Deliberately recall-oriented: an
+# over-broad pattern costs one probe candidate, an under-broad one spends
+# somebody else's privacy. Checkable facts live in work and technical material
+# anyway, so the expected loss is low.
+_SENSITIVE = re.compile(
+    # NOTE: re.X strips literal spaces, so every multi-word term uses \s+.
+    r"\b(oxy|opioid|suboxone|methadone|benzo|xanax|taper(ing|ed)?|withdrawal"
+    r"|relapse|detox|sober|dose|dosage|\d+\s*mg)\b"
+    r"|\b(suicid\w*|kill\s+myself|end\s+my\s+life|early\s+exit|self.harm"
+    r"|overdose|hopeless|can'?t\s+go\s+on)\b"
+    r"|\b(diagnos\w*|prescription|prescribed|therapist|psychiatrist|medication)\b"
+    r"|\b(divorce|marriage\s+counsel\w*|custody|affair|invalidated)\b"
+    r"|\bi\s+love\s+you\b"
+    r"|\b(eprs?|va\s+(claim|disability)|disability\s+claim|attorney|lawsuit"
+    r"|deposition)\b",
+    re.I)
+
 _MIN_CHARS = 80
 _MAX_CHARS = 600
 _PER_CATEGORY = 40
@@ -72,11 +92,15 @@ def select(turns: list[Turn], pattern: str, limit: int = _PER_CATEGORY,
     rx = re.compile(pattern, re.I)
     seen: set[str] = set()
     out: list[str] = []
+    withheld = 0
     for t in sorted(turns, key=lambda t: -len(t.text)):
         text = _normalize(t.text)
         if not (_MIN_CHARS <= len(text) <= _MAX_CHARS) or not rx.search(text):
             continue
         if text in exclude_texts:
+            continue
+        if _SENSITIVE.search(text):
+            withheld += 1
             continue
         key = _dedupe_key(text)
         if key in seen:
@@ -85,6 +109,7 @@ def select(turns: list[Turn], pattern: str, limit: int = _PER_CATEGORY,
         out.append(text)
         if len(out) >= limit:
             break
+    select.last_withheld = withheld          # read by render(); see "no silent caps"
     return out
 
 
@@ -108,6 +133,7 @@ def render(subject_id: str, version: str, train: list[Turn],
            heldout_n: int, quarantined_n: int,
            exclude_texts: frozenset[str] = frozenset()) -> str:
     lines: list[str] = []
+    total_withheld = 0
     w = lines.append
     w(f"# S5 fact-probe worksheet — {subject_id} / {version}")
     w("")
@@ -133,6 +159,8 @@ def render(subject_id: str, version: str, train: list[Turn],
     w("")
     for name, pattern in CATEGORIES.items():
         picked = select(train, pattern, exclude_texts=exclude_texts)
+        withheld = getattr(select, "last_withheld", 0)
+        total_withheld += withheld
         w(f"## {name} ({len(picked)})")
         w("")
         if not picked:
@@ -142,6 +170,11 @@ def render(subject_id: str, version: str, train: list[Turn],
         for text in picked:
             w(f"- {text}")
         w("")
+    w(f"_{total_withheld} matching line(s) withheld as sensitive "
+      "(health, substance, intimate, or third-party legal material). "
+      "Probe files are not classifier-gated, so this material is kept out of "
+      "probe authoring entirely._")
+    w("")
     w("## recurring topics")
     w("")
     w("Frequency only — use these to check coverage, and to find territory where you")
