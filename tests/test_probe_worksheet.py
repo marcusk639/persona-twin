@@ -155,3 +155,40 @@ def test_excluded_count_is_reported_not_silently_dropped(tmp_path):
     pw.main(["alice", "v1", "--root", str(tmp_path)])
     body = (Path(paths.probes) / "worksheet.md").read_text(encoding="utf-8")
     assert "withheld as sensitive" in body
+
+
+# Family coverage: each category is probed with SEVERAL phrasings, because a
+# filter built from remembered instances leaves siblings unswept -- "attorney"
+# without "lawyer", "can't go on" without "can't live like this".
+SENSITIVE_FAMILIES = {
+    "legal counsel": ["spent nearly 4k on this lawyer and it went badly",
+                      "my attorney said to wait", "the legal counsel we retained",
+                      "we are heading into arbitration over it",
+                      "they offered a severance package", "a settlement was proposed"],
+    "crisis": ["I can't live like this anymore", "I can't go on like this",
+               "make an early exit from this life", "thinking about ending it"],
+    "substance": ["down to 2.5mg oxy", "he is tapering off suboxone",
+                  "worried about a relapse", "the withdrawal was brutal"],
+    "medical": ["waiting on the diagnosis", "she changed my prescription",
+                "my therapist suggested", "the medication makes me foggy"],
+    "intimate": ["I love you more than anything", "we talked about divorce",
+                 "the custody arrangement", "I feel invalidated when we argue"],
+    "third-party claim": ["his EPRs from 2013", "the VA disability claim",
+                          "filing a disability claim for him"],
+}
+
+
+def test_every_sensitive_family_is_swept_not_just_one_phrasing():
+    import probe_worksheet as m
+    for family, phrasings in SENSITIVE_FAMILIES.items():
+        for phrase in phrasings:
+            assert m._SENSITIVE.search(phrase), f"{family}: unswept phrasing {phrase!r}"
+
+
+def test_the_filter_does_not_eat_ordinary_work_language():
+    import probe_worksheet as m
+    for ok in ["I always reach for the boring option first when a deadline looms",
+               "we settled on Postgres for the billing service after benchmarking",
+               "the interview process at that company was nonsensical",
+               "I prefer to write the migration before the endpoint"]:
+        assert not m._SENSITIVE.search(ok), f"false positive on work text: {ok!r}"

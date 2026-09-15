@@ -51,15 +51,27 @@ CATEGORIES: dict[str, str] = {
 # anyway, so the expected loss is low.
 _SENSITIVE = re.compile(
     # NOTE: re.X strips literal spaces, so every multi-word term uses \s+.
-    r"\b(oxy|opioid|suboxone|methadone|benzo|xanax|taper(ing|ed)?|withdrawal"
-    r"|relapse|detox|sober|dose|dosage|\d+\s*mg)\b"
-    r"|\b(suicid\w*|kill\s+myself|end\s+my\s+life|early\s+exit|self.harm"
-    r"|overdose|hopeless|can'?t\s+go\s+on)\b"
-    r"|\b(diagnos\w*|prescription|prescribed|therapist|psychiatrist|medication)\b"
+    # Organised by FAMILY, not by remembered instance: a list of specific
+    # phrases leaves siblings unswept (attorney without lawyer, "can't go on"
+    # without "can't live like this"). Each family is asserted with several
+    # phrasings in the tests.
+    # substances / recovery
+    r"\b(oxy|opioid|suboxone|methadone|benzo|xanax|taper(ing|ed|s)?|withdrawal"
+    r"|relaps\w*|detox|dose|dosage|\d+\s*mg)\b"
+    # crisis / self-harm
+    r"|\b(suicid\w*|kill\s+myself|end(ing)?\s+(my\s+life|it)|early\s+exit"
+    r"|self.harm|overdose|hopeless)\b"
+    r"|\bcan'?t\s+(go\s+on|live\s+like\s+this|keep\s+going)\b"
+    # medical
+    r"|\b(diagnos\w*|prescri\w*|therapist|psychiatrist|medication|meds)\b"
+    # intimate / family law
     r"|\b(divorce|marriage\s+counsel\w*|custody|affair|invalidated)\b"
     r"|\bi\s+love\s+you\b"
-    r"|\b(eprs?|va\s+(claim|disability)|disability\s+claim|attorney|lawsuit"
-    r"|deposition)\b",
+    # legal / employment dispute / third-party claims
+    r"|\b(lawyer|attorney|legal\s+counsel|law\s+firm|retained\s+counsel"
+    r"|lawsuit|litigation|arbitration|deposition|settlement|severance"
+    r"|wrongful\s+termination|retaliation|nda)\b"
+    r"|\b(eprs?|va\s+(claim|disability)|disability\s+claim)\b",
     re.I)
 
 _MIN_CHARS = 80
