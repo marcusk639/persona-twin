@@ -38,8 +38,13 @@ class LearningLedger:
     def read_all(self) -> list[LedgerEntry]:
         if not self.path.exists():
             return []
+        # split("\n"), never splitlines(): the latter also breaks on U+2028,
+        # U+2029 and U+0085, which JSON does not escape. A payload carrying one
+        # -- run_connector records str(exc), and corpus text reaches it -- would
+        # be sheared into unparseable halves, taking the whole append-only chain
+        # down with it. read_text already normalizes \r\n to \n.
         return [LedgerEntry.model_validate_json(line)
-                for line in self.path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                for line in self.path.read_text(encoding="utf-8").split("\n") if line.strip()]
 
     def provenance(self, entry_id: str) -> list[LedgerEntry]:
         by_id = {e.entry_id: e for e in self.read_all()}

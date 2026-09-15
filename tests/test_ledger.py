@@ -66,3 +66,20 @@ def test_provenance_with_revisited_parent(tmp_path):
     assert len(chain) == 3
     assert chain[0].entry_id == c.entry_id
     assert chain[-1].entry_id == a.entry_id
+
+
+def test_entry_containing_a_unicode_line_separator_round_trips(tmp_path):
+    """U+2028 is a line break to str.splitlines() but NOT escaped by JSON.
+
+    run_connector records str(exc) on a partial ingest, so a connector failing
+    while handling corpus text can put this character into the append-only
+    chain. Splitting on it shears one entry into two unparseable halves and
+    makes the whole provenance chain unreadable -- fail-closed in the wrong
+    direction, on the mechanism that makes consent revocation executable.
+    """
+    led = LearningLedger(tmp_path / "ledger.jsonl")
+    led.append("ingest", "alice", {"error": "bad turn: line break"})
+    led.append("ingest", "alice", {"error": "plain"})
+    entries = led.read_all()
+    assert len(entries) == 2
+    assert entries[0].payload["error"] == "bad turn: line break"
