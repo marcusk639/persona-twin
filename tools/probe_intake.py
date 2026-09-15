@@ -3,8 +3,8 @@
 Writing 200 probes directly as JSON is tedious enough that it discourages
 writing them at all. This takes a line-oriented format instead:
 
-    A | Which firm did I work at before TWK? | Baker Tilly
-    U | What was my grandmother's maiden name?
+    A | What framework is Regroup built with? | React Native
+    U | How many paying users does Regroup have?
     U | Which of my brothers came to the 2019 conference? | | no brothers
 
 Fields are pipe-separated: kind, question, expected, notes.
@@ -28,6 +28,32 @@ class IntakeError(Exception):
     """A line could not be parsed. Reported with its line number, and nothing
     is written -- a partial probe file is worse than none, because the gate
     would report a composition that does not match what was intended."""
+
+
+# A generated draft ships with this where an answer belongs. Converting it
+# verbatim would produce a probe whose expected answer is literally "???" --
+# counted toward S5's n>=200 while measuring nothing, and scored as a miss
+# against every twin forever.
+PLACEHOLDER = "???"
+
+
+def parse_with_skips(text: str) -> tuple[list[dict], int]:
+    """parse(), but unfilled placeholder rows are skipped and counted.
+
+    Returned rather than logged: a draft that silently converted 40 of its 130
+    rows would report a composition the author never intended.
+    """
+    kept, skipped = [], 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = [p.strip() for p in stripped.split("|")]
+        if parts[0].strip().upper() == "A" and len(parts) > 2 and parts[2] == PLACEHOLDER:
+            skipped += 1
+            continue
+        kept.extend(parse(line))
+    return kept, skipped
 
 
 def parse(text: str) -> list[dict]:
