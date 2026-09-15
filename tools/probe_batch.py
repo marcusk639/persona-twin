@@ -58,16 +58,23 @@ def rows_for_entity(train: list[Turn], entity: str, kind: str) -> tuple[list[str
     hits = [t for t in train if re.search(re.escape(entity), t.text, re.I)]
     if len(hits) < _ENTITY_FLOOR:
         return [], len(hits)
+    # Unanswerable rows are NO LONGER generated. The absence detector behind
+    # them checked one narrow vocabulary within a single turn, and a
+    # wider-window re-check found 12 of 15 "verified absent" claims to be
+    # false: "launched" / "went live" / "shipped" / "TestFlight" are one fact,
+    # and a launch date is usually stated a sentence away from the product
+    # name. Shipping those rows asks the subject to validate the tool's own
+    # errors, and a false absence punishes a twin that answered correctly.
+    #
+    # Answerable rows are still offered: they require the attribute to be
+    # PRESENT, and a false positive there merely proposes a question the
+    # subject can decline.
     rows: list[str] = []
     for attr in ATTRIBUTES.get(kind, []):
         co = _count(hits, attr.pattern)
-        q = attr.template.format(e=entity)
-        if co == 0:
-            rows.append(f"U | {q} | | {entity} {len(hits)}x train, "
-                        f"{attr.key} 0x -- verified absent")
-        elif co >= _ANSWERABLE_FLOOR:
-            rows.append(f"A | {q} | ??? | {entity} {len(hits)}x train, "
-                        f"{attr.key} {co}x")
+        if co >= _ANSWERABLE_FLOOR:
+            rows.append(f"A | {attr.template.format(e=entity)} | ??? | "
+                        f"{entity} {len(hits)}x train, {attr.key} {co}x")
     return rows, len(hits)
 
 
@@ -91,7 +98,7 @@ def render(seed_lines: list[str], train: list[Turn],
         "#",
         "#    # ITEM 3 | Meta(241)          <- entity, and its training mentions",
         "#    # > Yeah Rudy hit me up ...   <- the line you wrote",
-        "#    U | Who was my manager at Meta? | | Meta 241x, manager 0x",
+        "#    A | Who was my manager at Mountain? | ???   <- evidence on the line",
         "#    A | ??? | ???",
         "#    # GAP:",
         "#",
@@ -118,15 +125,14 @@ def render(seed_lines: list[str], train: list[Turn],
         "#  the archive, not the twin.",
         "#",
         "# ---------------------------------------------------------------------",
-        "#  2. THE 'U' ROWS  --  delete the wrong ones",
+        "#  2. THE PRE-FILLED 'A' ROWS",
         "# ---------------------------------------------------------------------",
         "#",
-        "#  Pre-written for you. Each asks something your archive never records,",
-        "#  so any confident answer is invention -- which is what S5 measures.",
-        "#  The evidence is on the line ('Meta 241x, manager 0x').",
+        "#  Some blocks already carry a question, with evidence on the line",
+        "#  ('Mountain 213x train, manager 9x'). Those attributes ARE recorded,",
+        "#  so the answer exists in your archive -- just fill the ???.",
         "#",
-        "#  DELETE any row where you think the twin could reasonably know the",
-        "#  answer. Those punish a correct response. Keep the rest as-is.",
+        "#  Delete any you would rather not answer.",
         "#",
         "# ---------------------------------------------------------------------",
         "#  3. THE '# GAP:' LINE  --  optional, but valuable",
@@ -149,9 +155,9 @@ def render(seed_lines: list[str], train: list[Turn],
         "#  It keeps what is already authored, skips unfilled ??? rows, and",
         "#  reports where you stand against the gate.",
         "#",
-        "#  The gate wants 200 probes, 40-60% unanswerable. The U rows below are",
-        "#  already written, so every 'A' row you fill moves the balance toward",
-        "#  passing. Answerable probes are the scarce half.",
+        "#  The gate wants 200 probes, 40-60% unanswerable. The unanswerable",
+        "#  half is being reworked -- an earlier auto-detector produced mostly",
+        "#  false absences -- so concentrate on 'A' rows here.",
         "#",
         "# =====================================================================",
         "",

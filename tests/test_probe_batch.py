@@ -22,11 +22,14 @@ def _train(entity, extra="", n=8):
     return [_turn(f"more work on {entity} today {extra}", i) for i in range(n)]
 
 
-def test_absent_attribute_becomes_a_u_row():
+def test_an_absent_attribute_produces_no_row_at_all():
+    """Superseded: absent attributes used to become U rows. The detector behind
+    them was unreliable (12 of 15 claims false on a wider-window re-check), so
+    absence now produces nothing rather than a question the subject must
+    second-guess."""
     body, _ = pb.render(["thinking about Regroup again"], _train("Regroup"),
                         {"Regroup": "product"})
-    assert any(l.startswith("U | How many users does Regroup have?")
-               for l in body.splitlines())
+    assert "How many users does Regroup have?" not in body
 
 
 def test_recorded_attribute_becomes_an_a_row_awaiting_an_answer():
@@ -65,11 +68,13 @@ def test_only_entities_present_in_the_line_are_used():
 
 
 def test_the_draft_round_trips_through_the_existing_intake():
-    """The generated format must be the one probe_intake already reads."""
+    """The generated format must be the one probe_intake already reads. With
+    no U rows and every A row unfilled, a fresh draft yields zero probes and
+    all-skips -- which must parse cleanly rather than raise."""
     train = _train("Regroup")
     body, _ = pb.render(["Regroup notes"], train, {"Regroup": "product"})
     probes, skipped = pi.parse_with_skips(body)
-    assert probes and all(not p["answerable"] for p in probes)
+    assert probes == [] and skipped >= 1
 
 
 def test_unfilled_answer_rows_do_not_become_probes():
@@ -127,3 +132,20 @@ def test_the_guide_shows_a_worked_example_of_a_good_answer():
     """A rule without an example gets interpreted, not followed."""
     body, _ = pb.render(["a seed line"], [], {})
     assert "React Native" in body and "scores" in body
+
+
+def test_no_unanswerable_rows_are_generated():
+    """The absence detector proved unreliable: a wider-window re-check found 12
+    of 15 'verified absent' claims to be false, because single-turn narrow
+    vocabulary misses 'went live'/'shipped'/'TestFlight' for the same fact.
+    Emitting those rows asks the subject to validate the tool's errors."""
+    train = _train("Regroup")
+    body, _ = pb.render(["Regroup notes"], train, {"Regroup": "product"})
+    assert not [l for l in body.splitlines() if l.startswith("U |")]
+
+
+def test_entity_grounding_is_still_shown_as_context():
+    """Entity frequencies remain useful even without generated questions."""
+    body, _ = pb.render(["Regroup notes"], _train("Regroup", n=9),
+                        {"Regroup": "product"})
+    assert "Regroup(9)" in body
