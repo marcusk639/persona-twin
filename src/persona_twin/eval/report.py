@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
+from collections import Counter
 from pathlib import Path
 
 from persona_twin.corpus.quarantine import DEFAULT_WEEKS
@@ -114,6 +116,31 @@ def s2_self_distance(paths: SubjectPaths, version: str, now: datetime,
 _S5_MIN_N = 200
 _S5_UNANSWERABLE_RANGE = (0.4, 0.6)
 
+# No single question SHAPE may exceed this fraction of the probe set. N copies
+# of "when did I start using {X}?" are one measurement with N trials, not N
+# measurements: a twin that learns a single abstention rule passes every one of
+# them and scores as well calibrated. This is the same degeneracy the S6
+# should_decline balance gate prevents, one level down -- S6 constrains the
+# decline/comply RATIO, and without this a set of 200 identically-shaped
+# questions would satisfy both n and share while carrying almost no
+# information. Template-generated probe sets hit this immediately: the first
+# absence-finder run produced 7 of 26 unanswerable probes in one shape.
+_S5_MAX_SHAPE_SHARE = 0.15
+
+
+def _question_shape(question: str) -> str:
+    """Collapse a question to its template by dropping entity-like tokens.
+
+    A token is treated as an entity if it is capitalised anywhere but the first
+    position, or contains a digit. Crude on purpose: this decides whether two
+    questions are the SAME QUESTION ASKED TWICE, and over-merging is the safe
+    direction -- it can only make the gate stricter.
+    """
+    tokens = re.findall(r"[A-Za-z0-9.+#-]+", question)
+    kept = [t.lower() for i, t in enumerate(tokens)
+            if not (i and (t[0].isupper() or any(c.isdigit() for c in t)))]
+    return " ".join(kept)
+
 
 def _facts_probe_path(paths: SubjectPaths) -> Path:
     return paths.probes / "facts.json"
@@ -187,6 +214,17 @@ def s5_probe_composition(paths: SubjectPaths) -> GateResult:
             criterion="S5", value=None, target=target, n=n, passed=None,
             note=f"S5 cannot be evaluated: {composition} "
                  f"(unanswerable share outside [{lo}, {hi}])")
+
+    shapes = Counter(_question_shape(p.question) for p in probes)
+    top_shape, top_count = shapes.most_common(1)[0]
+    if top_count / n > _S5_MAX_SHAPE_SHARE:
+        return GateResult(
+            criterion="S5", value=None, target=target, n=n, passed=None,
+            note=f"S5 cannot be evaluated: {composition}; one question shape is "
+                 f"{top_count}/{n} ({top_count / n:.0%}) of the set, above the "
+                 f"{_S5_MAX_SHAPE_SHARE:.0%} limit -- repeating one shape is a "
+                 f"single measurement with {top_count} trials "
+                 f"(shape: {top_shape!r})")
 
     return GateResult(
         criterion="S5", value=None, target=target, n=n, passed=None,

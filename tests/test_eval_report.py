@@ -146,10 +146,22 @@ def test_s2_on_too_few_heldout_turns_does_not_report_a_flattering_zero(tmp_path)
 def _write_facts(paths, n_answerable, n_unanswerable):
     probes_dir = Path(paths.root) / "data" / "subjects" / paths.subject_id / "probes"
     probes_dir.mkdir(parents=True, exist_ok=True)
-    rows = [{"probe_id": f"a{i}", "question": "q", "expected": "x",
-             "answerable": True, "notes": ""} for i in range(n_answerable)]
-    rows += [{"probe_id": f"u{i}", "question": "q", "expected": "",
-              "answerable": False, "notes": ""} for i in range(n_unanswerable)]
+    # Questions must VARY: a probe set where every question shares one shape is
+    # itself the degeneracy the shape-concentration gate exists to catch, and a
+    # fixture that trips it would make every S5 test fail for the wrong reason.
+    # Shapes must vary, not just an entity token: _question_shape strips
+    # digits and capitalised words, so "the {i} thing" collapses to one shape
+    # and would trip the concentration gate for the wrong reason.
+    shapes = ["what did i say about", "which tool did i pick for",
+              "how did i handle", "what do i think of", "where did i learn",
+              "who did i work with on", "why did i leave", "when do i reach for",
+              "what broke in", "how do i test"]
+    rows = [{"probe_id": f"a{i}", "question": f"{shapes[i % len(shapes)]} it",
+             "expected": "x", "answerable": True, "notes": ""}
+            for i in range(n_answerable)]
+    rows += [{"probe_id": f"u{i}", "question": f"{shapes[i % len(shapes)]} that",
+              "expected": "", "answerable": False, "notes": ""}
+             for i in range(n_unanswerable)]
     (probes_dir / "facts.json").write_text(json.dumps(rows))
 
 
@@ -411,3 +423,32 @@ def test_render_never_shows_a_computed_value_for_pending_criteria():
             assert "0.0000" not in line
             assert "PASS" not in line
             assert "FAIL" not in line
+
+
+def _write_facts_one_shape(paths, n):
+    """Every probe the same question shape, only the entity differing."""
+    probes_dir = Path(paths.root) / "data" / "subjects" / paths.subject_id / "probes"
+    probes_dir.mkdir(parents=True, exist_ok=True)
+    rows = [{"probe_id": f"a{i}", "question": f"when did i start using Tool{i}",
+             "expected": "x", "answerable": True, "notes": ""} for i in range(n // 2)]
+    rows += [{"probe_id": f"u{i}", "question": f"when did i start using Thing{i}",
+              "expected": "", "answerable": False, "notes": ""} for i in range(n - n // 2)]
+    (probes_dir / "facts.json").write_text(json.dumps(rows))
+
+
+def test_s5_refuses_when_one_question_shape_dominates(tmp_path):
+    """N copies of one shape are one measurement with N trials: a twin that
+    learns a single abstention rule passes them all and scores calibrated."""
+    paths = SubjectPaths("s", tmp_path); paths.ensure()
+    _write_facts_one_shape(paths, 240)
+    r = s5_probe_composition(paths)
+    assert r.passed is None
+    assert "cannot be evaluated" in r.note.lower()
+    assert "shape" in r.note.lower()
+
+
+def test_s5_still_passes_composition_when_shapes_are_varied(tmp_path):
+    paths = SubjectPaths("s", tmp_path); paths.ensure()
+    _write_facts(paths, 120, 100)
+    r = s5_probe_composition(paths)
+    assert "composition OK" in r.note
