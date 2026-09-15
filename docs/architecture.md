@@ -13,6 +13,7 @@ graph TB
         CC[Claude Code .jsonl]
         CA[Claude.ai export.zip]
         PX[Perplexity export.json]
+        GPT[ChatGPT export.json]
         MB[mbox mail]
         GIT[git repos]
     end
@@ -84,15 +85,23 @@ nothing would flag.
 | `claude_code` | session `.jsonl` transcripts   | hash(file, offset, text)       | per-file byte offset |
 | `claude_ai`   | export zip                     | server message uuid            | whole-file size      |
 | `perplexity`  | export json                    | server entry uuid              | whole-file size      |
+| `chatgpt`     | export json (DAG)              | server message uuid            | whole-file size      |
 | `mail`        | mbox                           | Message-ID (path:idx fallback) | per-file index       |
 | `git_repos`   | commit messages                | commit sha                     | last sha             |
+
+`chatgpt` is the only source that stores a conversation as a DAG rather than a
+list: `mapping` is keyed by node id with `parent` pointers, and editing a prompt
+forks the tree, leaving retracted turns in the export forever. The connector
+walks `current_node` back through `parent` and emits only that chain — on the
+real export, 267 of 5,870 user turns (2% of volume) are off-branch, and are
+near-duplicates of turns that are emitted.
 
 Two cursor models, chosen by what the source guarantees:
 
 - **Append-only logs** (`claude_code`, `mail`) resume mid-file by byte offset or
   index. `claude_code` deliberately leaves its cursor at the _start_ of an incomplete
   final line — advancing past unparseable bytes permanently loses that message.
-- **Static snapshots** (`claude_ai`, `perplexity`) use `scan_snapshot_exports`: a
+- **Static snapshots** (`claude_ai`, `perplexity`, `chatgpt`) use `scan_snapshot_exports`: a
   whole-file marker emitted only with a file's last envelope, so a crash midway
   leaves the export re-scannable. Safe **only** because those sources carry stable
   server ids, making a re-scan a no-op.

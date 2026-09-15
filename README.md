@@ -14,7 +14,7 @@ scrubbing, and the eval harness are implemented; persona mining and model traini
 | Stage | Scope                                                                | State          |
 | ----- | -------------------------------------------------------------------- | -------------- |
 | 0     | Storage tiers, threat model, disclosure policy, ledger               | done           |
-| 1     | Connectors (iMessage, Claude Code, Claude.ai, Perplexity, mail, git) | done           |
+| 1     | Connectors (iMessage, Claude Code, Claude.ai, Perplexity, ChatGPT, mail, git) | done           |
 | 2     | Unified turn schema, identity resolution, scrub, golden freeze       | done           |
 | 3     | Held-out split, blind A/B runner, style metrics, probe sets          | in progress    |
 | 4+    | Persona mining, twin, voice tuning                                   | specified only |

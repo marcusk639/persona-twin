@@ -10,7 +10,8 @@ from persona_twin.scrub.classify import classify
 from persona_twin.scrub.secrets import redact
 from persona_twin.vault import VaultWriter
 
-SOURCES = ("imessage", "claude_code", "claude_ai", "perplexity", "git_repos", "mail")
+SOURCES = ("imessage", "claude_code", "claude_ai", "perplexity", "git_repos",
+           "mail", "chatgpt")
 
 @dataclass(frozen=True)
 class BuildReport:
