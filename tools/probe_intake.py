@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -104,20 +105,61 @@ def report(probes: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def main(src: str, dest: str) -> int:
+def _tokens(question: str) -> set[str]:
+    return set(re.sub(r"[^a-z ]", "", question.lower()).split())
+
+
+def _is_near_duplicate(question: str, existing: list[dict], threshold: float = 0.8) -> bool:
+    """Token-set overlap, not substring.
+
+    Substring matching let "How many users does Regroup have?" through against
+    an existing "How many PAYING users does Regroup have?" -- neither contains
+    the other, because the extra word sits in the middle.
+    """
+    t = _tokens(question)
+    if not t:
+        return False
+    for row in existing:
+        e = _tokens(row.get("question", ""))
+        if e and len(t & e) / len(t | e) >= threshold:
+            return True
+    return False
+
+
+def main(src: str, dest: str, merge: bool = False) -> int:
     try:
-        probes = parse(Path(src).read_text(encoding="utf-8"))
+        probes, unfilled = parse_with_skips(Path(src).read_text(encoding="utf-8"))
     except IntakeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    Path(dest).write_text(json.dumps(probes, indent=2), encoding="utf-8")
-    print(f"wrote {dest}")
-    print(report(probes))
+
+    existing: list[dict] = []
+    if merge and Path(dest).exists():
+        existing = json.loads(Path(dest).read_text(encoding="utf-8"))
+
+    kept = list(existing)
+    next_n = max((int(r["probe_id"].split("-")[-1]) for r in existing
+                  if r["probe_id"].split("-")[-1].isdigit()), default=0)
+    added = duplicates = 0
+    for probe in probes:
+        if _is_near_duplicate(probe["question"], kept):
+            duplicates += 1
+            continue
+        next_n += 1
+        added += 1
+        kept.append({**probe, "probe_id": f"fact-{next_n:03d}"} if merge else probe)
+
+    Path(dest).write_text(json.dumps(kept, indent=2) + "\n", encoding="utf-8")
+    verb = "merged into" if merge else "wrote"
+    print(f"{verb} {dest}: {added} added, {duplicates} duplicate(s) skipped, "
+          f"{unfilled} unfilled (???) skipped")
+    print(report(kept))
     return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    args = [a for a in sys.argv[1:] if a != "--merge"]
+    if len(args) != 2:
         print(__doc__)
         raise SystemExit(1)
-    raise SystemExit(main(sys.argv[1], sys.argv[2]))
+    raise SystemExit(main(args[0], args[1], merge="--merge" in sys.argv))
