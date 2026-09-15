@@ -192,3 +192,14 @@ def test_the_filter_does_not_eat_ordinary_work_language():
                "the interview process at that company was nonsensical",
                "I prefer to write the migration before the endpoint"]:
         assert not m._SENSITIVE.search(ok), f"false positive on work text: {ok!r}"
+
+
+def test_product_domain_vocabulary_is_not_treated_as_sensitive():
+    """The subject builds sober-living and recovery software; excluding that
+    vocabulary would eat his main project's entire corpus."""
+    import probe_worksheet as m
+    for ok in ["the sober living house setup screen is the finicky part",
+               "Regroup is a sober living app for house managers",
+               "the recovery platform needs a detox intake flow",
+               "house managers configure their house in the app"]:
+        assert not m._SENSITIVE.search(ok), f"product-domain false positive: {ok!r}"

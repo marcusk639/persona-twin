@@ -56,8 +56,11 @@ _SENSITIVE = re.compile(
     # without "can't live like this"). Each family is asserted with several
     # phrasings in the tests.
     # substances / recovery
+        # NOTE: "sober", "detox" and "recovery" are this subject's PRODUCT domain
+    # (a sober-living app), not personal health markers -- excluding them would
+    # eat his main project's vocabulary.
     r"\b(oxy|opioid|suboxone|methadone|benzo|xanax|taper(ing|ed|s)?|withdrawal"
-    r"|relaps\w*|detox|dose|dosage|\d+\s*mg)\b"
+    r"|relaps\w*|dose|dosage|\d+\s*mg)\b"
     # crisis / self-harm
     r"|\b(suicid\w*|kill\s+myself|end(ing)?\s+(my\s+life|it)|early\s+exit"
     r"|self.harm|overdose|hopeless)\b"
